@@ -1,0 +1,130 @@
+{% extends "base.html" %}
+
+{% block title %}Inventory (Stock on Hand){% endblock %}
+
+{% block content %}
+<div class="container mt-4">
+    <div class="card shadow-sm">
+        <div class="card-body p-4 p-md-5">
+            <h2 class="card-title mb-2">Inventory (Stock on Hand)</h2>
+            <p class="text-muted mb-4">Manage the current physical stock quantities and log new deliveries. This is your authoritative stock truth.</p>
+            
+            {# --- SECTION: Log New Stock Delivery --- #}
+            <div class="p-4 rounded-3 mb-5" style="background-color: #f8f9fa;">
+                <h4 class="mb-3">Log New Stock Delivery</h4>
+                <form action="{{ url_for('inventory_on_hand') }}" method="POST" class="row g-3">
+                    <input type="hidden" name="action" value="log_delivery">
+                    <div class="col-md-6">
+                        <label for="delivery_product" class="form-label">Product Received</label>
+                        <select id="delivery_product" name="delivery_product_id" class="form-select" required>
+                            <option value="" selected disabled>Select a product...</option>
+                            {% for product in products %}
+                                <option value="{{ product.id }}">{{ product.name }} ({{ product.unit_of_measure }})</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="col-md-4">
+                        <label for="delivery_quantity" class="form-label">Quantity Delivered</label>
+                        <input type="number" id="delivery_quantity" name="delivery_quantity" class="form-control" min="0" step="0.01" required>
+                    </div>
+                    <div class="col-md-2 d-flex align-items-end">
+                        <button type="submit" class="btn btn-success w-100"><i class="fas fa-truck-loading me-2"></i>Log Delivery</button>
+                    </div>
+                </form>
+            </div>
+
+            {# --- SECTION: Manually Adjust Inventory Quantities --- #}
+            <h4 class="mb-3">Manually Adjust Stock on Hand</h4>
+            <p class="text-muted mb-4">Select items to edit. A reason is required for all manual changes.</p>
+            <form action="{{ url_for('inventory_on_hand') }}" method="POST">
+                <input type="hidden" name="action" value="edit_stock">
+
+                <div class="mb-3">
+                    <label for="reason_for_change" class="form-label">Reason for Change (e.g., breakage, inventory audit, adjustment)</label>
+                    <input type="text" id="reason_for_change" name="reason_for_change" class="form-control" required placeholder="Mandatory reason for audit trail">
+                </div>
+
+                <div class="table-responsive">
+                    <table class="table table-striped table-hover align-middle">
+                        <thead class="table-dark">
+                            <tr>
+                                <th style="width: 5%;">Edit?</th>
+                                <th>Product Name</th>
+                                <th>Type</th>
+                                <th>Current Quantity</th>
+                                <th style="width: 20%;">New Quantity</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for product in products %}
+                            {% set ioh_entry = current_inventory.get(product.id) %}
+                            <tr>
+                                <td class="text-center">
+                                    <div class="form-check d-flex justify-content-center">
+                                        <input class="form-check-input edit-checkbox" type="checkbox" name="edit_product_{{ product.id }}" id="edit_product_{{ product.id }}">
+                                    </div>
+                                </td>
+                                <td class="fw-bold">{{ product.name }}</td>
+                                <td>{{ product.type }}</td>
+                                <td>
+                                    {{ ioh_entry.quantity|round(2) if ioh_entry else '0.00' }} {{ product.unit_of_measure }}
+                                </td>
+                                <td>
+                                    <div class="input-group">
+                                        <input type="number" name="quantity_{{ product.id }}" class="form-control quantity-input" 
+                                               min="0" step="0.01" 
+                                               value="{{ ioh_entry.quantity if ioh_entry else '0.00' }}"
+                                               {% if not ioh_entry %}placeholder="Enter initial stock"{% endif %}
+                                               disabled> {# Initially disabled #}
+                                        <span class="input-group-text">{{ product.unit_of_measure }}</span>
+                                    </div>
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                <div class="d-grid mt-4">
+                    <button type="submit" class="btn btn-primary btn-lg" id="submit-edit-btn" disabled>Save Inventory Adjustments</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+{% block scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const editCheckboxes = document.querySelectorAll('.edit-checkbox');
+    const submitEditBtn = document.getElementById('submit-edit-btn');
+    const reasonForChangeInput = document.getElementById('reason_for_change');
+
+    function toggleInputState(checkbox) {
+        const row = checkbox.closest('tr');
+        const quantityInput = row.querySelector('.quantity-input');
+        if (quantityInput) {
+            quantityInput.disabled = !checkbox.checked;
+        }
+    }
+
+    function updateSubmitButtonAndReason() {
+        const anyChecked = Array.from(editCheckboxes).some(cb => cb.checked);
+        submitEditBtn.disabled = !anyChecked;
+        reasonForChangeInput.required = anyChecked; // Make reason required only if editing
+    }
+
+    editCheckboxes.forEach(checkbox => {
+        checkbox.addEventListener('change', function() {
+            toggleInputState(this);
+            updateSubmitButtonAndReason();
+        });
+        // Initial state: ensure inputs are disabled if checkbox is not checked
+        toggleInputState(checkbox);
+    });
+
+    // Initial check in case some checkboxes are pre-checked (though unlikely for new entries)
+    updateSubmitButtonAndReason(); 
+});
+</script>
+{% endblock scripts %}
+{% endblock %}

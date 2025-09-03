@@ -1,0 +1,576 @@
+{% extends "base.html" %}
+
+{% block title %}
+    {% if view_type == 'personal' %}
+        My Schedule
+    {% else %}
+        {{ consolidated_label }}
+    {% endif %}
+{% endblock %}
+
+{% block content %}
+<div class="container mt-4">
+    <div class="card shadow-sm">
+        <div class="card-body p-4 p-md-5">
+            <div class="d-flex justify-content-between align-items-center mb-3">
+                <h2 class="card-title mb-0">
+                    {% if view_type == 'personal' %}
+                        My Schedule
+                    {% else %}
+                        {{ consolidated_label }}
+                    {% endif %}
+                </h2>
+
+                {# Buttons for personal view: Request New Swap and Relinquish Shift #}
+                {% if view_type == 'personal' and (current_user.has_role('bartender') or current_user.has_role('waiter') or current_user.has_role('skullers')) %}
+                <div class="d-flex gap-2">
+                    <button type="button" class="btn btn-primary" data-bs-toggle="collapse" data-bs-target="#swapRequestForm"
+                            aria-expanded="false" aria-controls="swapRequestForm" id="mainRequestSwapBtn">
+                        <i class="fas fa-exchange-alt"></i> Request New Swap
+                    </button>
+                    {# NEW BUTTON: Relinquish Shift #}
+                    <button type="button" class="btn btn-warning text-dark" data-bs-toggle="collapse" data-bs-target="#relinquishShiftForm"
+                            aria-expanded="false" aria-controls="relinquishShiftForm" id="mainRelinquishShiftBtn">
+                        <i class="fas fa-hand-paper"></i> Relinquish Shift
+                    </button>
+                </div>
+                {% endif %}
+
+                {% if view_type in ['boh', 'foh', 'bartenders', 'waiters', 'skullers', 'managers'] %}
+                <div class="form-check">
+                    <input class="form-check-input" type="checkbox" id="showManagerShiftsCheckbox" checked>
+                    <label class="form-check-label" for="showManagerShiftsCheckbox">Show Manager Shifts</label>
+                </div>
+                {% endif %}
+            </div>
+
+            {# NEW: Collapsible Shift Time Rules for the relevant role (and the new View Rules button) #}
+            {% set current_role_shift_defs = role_shift_definitions.get(display_role_name_for_rules, role_shift_definitions.get('manager')) %}
+            {% if current_role_shift_defs %}
+                <div class="mb-4 d-flex justify-content-between align-items-center">
+                    <button class="btn btn-light text-start flex-grow-1 me-2" type="button" data-bs-toggle="collapse" data-bs-target="#myScheduleShiftTimesCollapse" aria-expanded="true" aria-controls="myScheduleShiftTimesCollapse">
+                        <i class="fas fa-clock me-2"></i> Toggle Shift Time Rules for {{ display_role_name_for_rules | title }}s
+                    </button>
+                    {# NEW: View Rules Button for the modal #}
+                    <button type="button" class="btn btn-outline-primary" data-bs-toggle="modal" data-bs-target="#myScheduleRulesModal">
+                        <i class="fas fa-info-circle me-2"></i>View Rules
+                    </button>
+                </div>
+                <div class="collapse show" id="myScheduleShiftTimesCollapse">
+                    <div class="p-3 border rounded-bottom bg-light mb-4"> {# Added mb-4 for spacing #}
+                        <div class="row row-cols-1 row-cols-md-2 row-cols-lg-3 g-2">
+                            {% for day in week_dates %}
+                                {% if day.strftime('%A') != 'Monday' %}
+                                    {% set day_name = day.strftime('%A') %}
+                                    {% set day_specific_defs = current_role_shift_defs.get(day_name, current_role_shift_defs.get('default')) %}
+                                    {% if day_specific_defs %}
+                                        <div class="col">
+                                            <strong>{{ day_name }}</strong>
+                                            <ul class="list-unstyled mb-0">
+                                                {% for shift_type, times in day_specific_defs.items() %}
+                                                    <li>{{ shift_type }}: {{ times.start }} - {{ times.end }}</li>
+                                                {% endfor %}
+                                            </ul>
+                                        </div>
+                                    {% endif %}
+                                {% endif %}
+                            {% endfor %}
+                        </div>
+                    </div>
+                </div>
+            {% endif %}
+
+
+            <div class="table-responsive">
+                {% set ns = namespace(dates=[]) %}
+                {% for d in week_dates %}
+                    {% if d.strftime('%A') != 'Monday' %}
+                        {% set _ = ns.dates.append(d) %}
+                    {% endif %}
+                {% endfor %}
+
+                {# Macro to render a shift with its time details #}
+                {% macro render_shift_with_time(shift_obj, user_obj_or_role_name) %}
+                    {% set day_name = shift_obj.shift_date.strftime('%A') %}
+                    {% set role_name_for_lookup = '' %}
+
+                    {# Determine role_name for time lookup #}
+                    {% if user_obj_or_role_name is string %}
+                        {% set role_name_for_lookup = user_obj_or_role_name %}
+                    {% else %}
+                        {% if user_obj_or_role_name.has_role('bartender') %}{% set role_name_for_lookup = 'bartender' %}
+                        {% elif user_obj_or_role_name.has_role('waiter') %}{% set role_name_for_lookup = 'waiter' %}
+                        {% elif user_obj_or_role_name.has_role('skullers') %}{% set role_name_for_lookup = 'skullers' %}
+                        {% elif user_obj_or_role_name.has_role('manager') %}{% set role_name_for_lookup = 'manager' %}
+                        {% elif user_obj_or_role_name.has_role('general_manager') %}{% set role_name_for_lookup = 'general_manager' %}
+                        {% elif user_obj_or_role_name.has_role('system_admin') %}{% set role_name_for_lookup = 'system_admin' %}
+                        {% elif user_obj_or_role_name.has_role('scheduler') %}{% set role_name_for_lookup = 'scheduler' %}
+                        {% else %}{% set role_name_for_lookup = 'manager' %}
+                        {% endif %}
+                    {% endif %}
+                    
+                    {% set shift_time_display = get_shift_time_display(role_name_for_lookup, day_name, shift_obj.assigned_shift, shift_obj.start_time_str, shift_obj.end_time_str) %}
+
+                    {{ shift_obj.assigned_shift }} <small class="text-muted">{{ shift_time_display }}</small>
+                    {# Check if a swap request or volunteer request is pending for this shift #}
+                    {% set pending_swap = shift_obj.swap_requests|selectattr('status','equalto','Pending')|first %}
+                    {% set pending_volunteer = shift_obj.volunteered_cycle if shift_obj.volunteered_cycle and (shift_obj.volunteered_cycle.status == 'Open' or shift_obj.volunteered_cycle.status == 'PendingApproval') else None %} 
+                    {% if pending_swap %}
+                        <span class="badge bg-warning text-dark ms-2">Swap Pending (Suggested: {{ pending_swap.coverer.full_name if pending_swap.coverer else 'None' }})</span>
+                    {% elif pending_volunteer %}
+                        <span class="badge bg-info text-dark ms-2">Relinquished - Open for Volunteers</span>
+                    {% endif %}
+                {% endmacro %}
+
+
+                {% if view_type != 'personal' %}
+                    <div id="manager-schedule-section">
+                        {% if manager_users %}
+                        <h4 class="mt-4 mb-3">Managers</h4>
+                        <table class="table table-striped table-hover align-middle">
+                            <thead class="table-dark">
+                                <tr>
+                                    <th scope="col">Manager</th>
+                                    {% for day in ns.dates %}
+                                        <th scope="col">{{ day.strftime('%A, %b %d') }}</th>
+                                    {% endfor %}
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for user in manager_users %}
+                                    <tr class="manager-row"> 
+                                        <td class="fw-bold">{{ user.full_name }}</td>
+                                        {% for day in ns.dates %}
+                                            <td>
+                                                {% set shifts = schedule_by_user.get(user.id, {}).get(day, []) %}
+                                                {% if shifts %}
+                                                    {% for shift in shifts %}
+                                                        {{ render_shift_with_time(shift, user) }}<br>
+                                                    {% endfor %}
+                                                {% else %}
+                                                    <span class="text-muted">OFF</span>
+                                                {% endif %}
+                                            </td>
+                                        {% endfor %}
+                                    </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                        {% endif %}
+                    </div>
+
+                    {% if view_type == 'boh' %}
+                        {% if bartender_users %}
+                        <h4 class="mt-4 mb-3">Bartenders</h4>
+                        <table class="table table-striped table-hover align-middle">
+                            <thead class="table-dark">
+                                <tr>
+                                    <th scope="col">Bartender</th>
+                                    {% for day in ns.dates %}
+                                        <th scope="col">{{ day.strftime('%A, %b %d') }}</th>
+                                    {% endfor %}
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for user in bartender_users %}
+                                    <tr>
+                                        <td class="fw-bold">{{ user.full_name }}</td>
+                                        {% for day in ns.dates %}
+                                            <td>
+                                                {% set shifts = schedule_by_user.get(user.id, {}).get(day, []) %}
+                                                {% if shifts %}
+                                                    {% for shift in shifts %}
+                                                        {{ render_shift_with_time(shift, user) }}<br>
+                                                    {% endfor %}
+                                                {% else %}
+                                                    <span class="text-muted">OFF</span>
+                                                {% endif %}
+                                            </td>
+                                        {% endfor %}
+                                    </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                        {% endif %}
+
+                        {% if skuller_users %}
+                        <h4 class="mt-4 mb-3">Skullers</h4>
+                        <table class="table table-striped table-hover align-middle">
+                            <thead class="table-dark">
+                                <tr>
+                                    <th scope="col">Skuller</th>
+                                    {% for day in ns.dates %}
+                                        <th scope="col">{{ day.strftime('%A, %b %d') }}</th>
+                                    {% endfor %}
+                                </tr>
+                            </thead >
+                            <tbody>
+                                {% for user in skuller_users %}
+                                    <tr>
+                                        <td class="fw-bold">{{ user.full_name }}</td>
+                                        {% for day in ns.dates %}
+                                            <td>
+                                                {% set shifts = schedule_by_user.get(user.id, {}).get(day, []) %}
+                                                {% if shifts %}
+                                                    {% for shift in shifts %}
+                                                        {{ render_shift_with_time(shift, user) }}<br>
+                                                    {% endfor %}
+                                                {% else %}
+                                                    <span class="text-muted">OFF</span>
+                                                {% endif %}
+                                            </td>
+                                        {% endfor %}
+                                    </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                        {% endif %}
+
+                        {% if not bartender_users and not skuller_users and not manager_users %}
+                            <p class="text-muted text-center">No schedule data available for this Back of House view.</p>
+                        {% endif %}
+
+                    {% else %}
+                        {% if staff_users %}
+                        <h4 class="mt-4 mb-3">Staff</h4>
+                        <table class="table table-striped table-hover align-middle">
+                            <thead class="table-dark">
+                                <tr>
+                                    <th scope="col">User</th>
+                                    {% for day in ns.dates %}
+                                        <th scope="col">{{ day.strftime('%A, %b %d') }}</th>
+                                    {% endfor %}
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for user in staff_users %}
+                                    <tr>
+                                        <td class="fw-bold">{{ user.full_name }}</td>
+                                        {% for day in ns.dates %}
+                                            <td>
+                                                {% set shifts = schedule_by_user.get(user.id, {}).get(day, []) %}
+                                                {% if shifts %}
+                                                    {% for shift in shifts %}
+                                                        {{ render_shift_with_time(shift, user) }}<br>
+                                                    {% endfor %}
+                                                {% else %}
+                                                    <span class="text-muted">OFF</span>
+                                                {% endif %}
+                                            </td>
+                                        {% endfor %}
+                                    </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                        {% elif not manager_users %}
+                            <p class="text-muted text-center">No schedule data available for this view.</p>
+                        {% endif %}
+                    {% endif %}
+
+                {% else %}
+                    <!-- Personal view table -->
+                    <table class="table table-striped table-hover align-middle">
+                        <thead class="table-dark">
+                            <tr>
+                                <th scope="col"></th>
+                                {% for day in ns.dates %}
+                                    <th scope="col">{{ day.strftime('%A, %b %d') }}</th>
+                                {% endfor %}
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td><strong>Shifts</strong></td>
+                                {% for day in ns.dates %}
+                                    <td>
+                                        {% set shifts = schedule_by_day.get(day, []) if schedule_by_day is defined else [] %}
+                                        {% if shifts %}
+                                            {% for shift in shifts %}
+                                                {{ render_shift_with_time(shift, current_user) }}<br>
+                                            {% endfor %}
+                                        {% else %}
+                                            <span class="text-muted">OFF</span>
+                                        {% endif %}
+                                    </td>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+
+                    {# Collapsible Swap Request Form Section #}
+                    {% if current_user.has_role('bartender') or current_user.has_role('waiter') or current_user.has_role('skullers') %}
+                    <div class="collapse mt-4" id="swapRequestForm">
+                        <div class="card card-body bg-light">
+                            <h5 class="card-title">Initiate Shift Swap</h5>
+                            <form action="{{ url_for('submit_new_swap_request') }}" method="POST">
+                                <div class="mb-3">
+                                    <label for="shiftToSwap" class="form-label">Shift to Swap</label>
+                                    <select class="form-select" id="shiftToSwap" name="requester_schedule_id" required>
+                                        <option value="" disabled selected>Select your shift...</option>
+                                    </select>
+                                </div>
+                                <div class="mb-3">
+                                    <label for="desiredCover" class="form-label">Suggested Cover</label>
+                                    <select class="form-select" id="desiredCover" name="desired_cover_id" required>
+                                        <option value="" disabled selected>Select a potential cover...</option>
+                                    </select>
+                                </div>
+                                <button type="submit" class="btn btn-primary">Submit Swap Request</button>
+                                <button type="button" class="btn btn-secondary" data-bs-toggle="collapse" data-bs-target="#swapRequestForm">Cancel</button>
+                            </form>
+                        </div>
+                    </div>
+
+                    {# NEW: Collapsible Relinquish Shift Form Section #}
+                    <div class="collapse mt-4" id="relinquishShiftForm">
+                        <div class="card card-body bg-light">
+                            <h5 class="card-title">Relinquish a Shift</h5>
+                            <form action="{{ url_for('relinquish_shift') }}" method="POST">
+                                <div class="mb-3">
+                                    <label for="shiftToRelinquish" class="form-label">Shift to Give Up</label>
+                                    <select class="form-select" id="shiftToRelinquish" name="schedule_id" required>
+                                        <option value="" disabled selected>Select your shift to relinquish...</option>
+                                    </select>
+                                </div>
+                                <div class="mb-3">
+                                    <label for="relinquishReason" class="form-label">Reason for Relinquishing (Optional)</label>
+                                    <textarea class="form-control" id="relinquishReason" name="relinquish_reason" rows="3" placeholder="e.g., Unexpected appointment"></textarea>
+                                </div>
+                                <button type="submit" class="btn btn-warning text-dark">Submit Relinquish Request</button>
+                                <button type="button" class="btn btn-secondary" data-bs-toggle="collapse" data-bs-target="#relinquishShiftForm">Cancel</button>
+                            </form>
+                        </div>
+                    </div>
+                    {% endif %}
+
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+
+{# NEW: My Schedule Rules Modal (copy of scheduler's modal, but with different ID) #}
+<div class="modal fade" id="myScheduleRulesModal" tabindex="-1" aria-labelledby="myScheduleRulesModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+            <h5 class="modal-title" id="myScheduleRulesModalLabel">Shift Assignment Rules & Guidelines for {{ display_role_name_for_rules | title }}s</h5>
+            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <h6>General Guidelines:</h6>
+                <ul>
+                    {% if current_user.has_role('bartender') or current_user.has_role('manager') or current_user.has_role('skullers') %}      
+                    <li><strong>BOH Roles (Bartenders, Skullers):</strong></li>                  
+                    <li>All leave requests to be done by WEDNESDAY THE WEEK PRIOR to the days required</li>
+                    <li>In the event of you being or absent contact management 24 HOURS prior to said shift</li>
+                    <li>Roster is subject to change at any time due to the demands of the operation. Staff will be informed of changes</li>
+                    <li>Above points ALWAYS to be discussed with management on duty and arragements with directors to be communicated</li>
+                    <li style="color: yellow;"><mark>New staff to shadow/train from senior bartenders on shift for MINIMUM 3 SHIFTS. Thereafter spot tests to be issued</mark></li>
+                    {% endif %}
+                    {% if current_user.has_role('waiter') or current_user.has_role('manager') %}
+                    <li><strong>FOH Roles (Waiters):</strong></li>
+                    <li>PLEASE NOTE: Earlier shift on weekends to allow for smooth handover from day shift to night shift.<br>
+                        If you expierence delays or tansportation issues please inform management on duty for said shift within a reasonable time frrame</li>
+                    <li>All absentees due to sickness is to be supported with an official signed medical notice within 48 hours to management</li>
+                    {% endif %}
+                </ul>        
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+{% block scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+    const cb = document.getElementById('showManagerShiftsCheckbox');
+    const managerSection = document.getElementById('manager-schedule-section');
+    if (cb && managerSection) {
+        const toggleManagerSection = (show) => {
+            if (show) {
+                managerSection.classList.remove('d-none');
+            } else {
+                managerSection.classList.add('d-none');
+            }
+        };
+        toggleManagerSection(cb.checked);
+        cb.addEventListener('change', (e) => toggleManagerSection(e.target.checked));
+    }
+
+    let personalScheduleData = {};
+    {% if view_type == 'personal' %}
+        {% if personal_schedule_data_json %}
+            personalScheduleData = JSON.parse({{ personal_schedule_data_json | tojson | safe }});
+        {% else %}
+            console.warn("personal_schedule_data_json is not defined or is empty for personal view.");
+        {% endif %}
+    {% endif %}
+
+    let allEligibleStaff = [];
+    let staffSchedulesForWeek = {};
+    let currentUserRoles = [];
+
+    {% if view_type == 'personal' %}
+        {% if all_eligible_staff_json %}
+            allEligibleStaff = JSON.parse({{ all_eligible_staff_json | tojson | safe }});
+        {% else %}
+            console.warn("all_eligible_staff_json is not defined or is empty for personal view.");
+        {% endif %}
+
+        {% if staff_schedules_for_week_json %}
+            staffSchedulesForWeek = JSON.parse({{ staff_schedules_for_week_json | tojson | safe }});
+        {% else %}
+            console.warn("staff_schedules_for_week_json is not defined or is empty for personal view.");
+        {% endif %}
+
+        {% if current_user_roles_json %}
+            currentUserRoles = JSON.parse({{ current_user_roles_json | tojson | safe }});
+        {% else %}
+            console.warn("current_user_roles_json is not defined or is empty for personal view.");
+        {% endif %}
+    {% endif %}
+
+    const currentUserId = {{ current_user.id | tojson }};
+
+    const mainRequestSwapBtn = document.getElementById('mainRequestSwapBtn');
+    const shiftToSwapSelect = document.getElementById('shiftToSwap');
+    const desiredCoverSelect = document.getElementById('desiredCover');
+    const swapRequestFormCollapseEl = document.getElementById('swapRequestForm');
+    let swapRequestFormCollapse = null;
+    if (swapRequestFormCollapseEl) {
+        swapRequestFormCollapse = new bootstrap.Collapse(swapRequestFormCollapseEl, { toggle: false });
+    }
+
+    const mainRelinquishShiftBtn = document.getElementById('mainRelinquishShiftBtn');
+    const shiftToRelinquishSelect = document.getElementById('shiftToRelinquish');
+    const relinquishShiftFormCollapseEl = document.getElementById('relinquishShiftForm');
+    let relinquishShiftFormCollapse = null;
+    if (relinquishShiftFormCollapseEl) {
+        relinquishShiftFormCollapse = new bootstrap.Collapse(relinquishShiftFormCollapseEl, { toggle: false });
+    }
+
+
+    function populateShiftsToDropdown(dropdownSelect, includePendingSwaps = true, includePendingRelinquished = true) {
+        if (!dropdownSelect) return;
+        dropdownSelect.innerHTML = '<option value="" disabled selected>Select your shift...</option>';
+
+        const sortedDays = Object.keys(personalScheduleData).sort((a,b) => new Date(a) - new Date(b));
+
+        sortedDays.forEach(dayStr => {
+            const shiftsOnDay = personalScheduleData[dayStr] || [];
+            shiftsOnDay.forEach(shift => {
+                const isPendingSwap = Array.isArray(shift.swap_requests) && shift.swap_requests.some(req => req && req.status === 'Pending');
+                const isPendingRelinquished = shift.volunteered_cycle && (shift.volunteered_cycle.status === 'Open' || shift.volunteered_cycle.status === 'PendingApproval');
+
+                let shouldAdd = true;
+                if (!includePendingSwaps && isPendingSwap) {
+                    shouldAdd = false;
+                }
+                if (!includePendingRelinquished && isPendingRelinquished) {
+                    shouldAdd = false;
+                }
+
+                if (shouldAdd) {
+                    const option = document.createElement('option');
+                    option.value = shift.id;
+                    const dateObj = new Date(shift.shift_date + 'T00:00:00'); 
+                    const dateLabel = dateObj.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
+                    
+                    let shiftText = shift.assigned_shift;
+                    // Check if it's a custom time shift and has times
+                    if (['Split Double', 'Double A', 'Double B'].includes(shift.assigned_shift) && shift.start_time_str && shift.end_time_str) {
+                        shiftText += ` (${shift.start_time_str} - ${shift.end_time_str})`;
+                    }
+                    option.textContent = `${shiftText} on ${dateLabel}`;
+                    option.dataset.shiftDate = shift.shift_date;
+                    option.dataset.shiftType = shift.assigned_shift;
+                    dropdownSelect.appendChild(option);
+                }
+            });
+        });
+    }
+
+    if (mainRequestSwapBtn) {
+        mainRequestSwapBtn.addEventListener('click', function() {
+            populateShiftsToDropdown(shiftToSwapSelect, false, true);
+            filterDesiredCoverDropdown(); 
+            if (swapRequestFormCollapse) { swapRequestFormCollapse.show(); }
+            if (relinquishShiftFormCollapse) { relinquishShiftFormCollapse.hide(); }
+        });
+    }
+
+    function getPersonalShiftDetails(shiftId) {
+        for (const dayStr in personalScheduleData) {
+            const shiftsOnDay = personalScheduleData[dayStr];
+            const shift = shiftsOnDay.find(s => s.id == shiftId);
+            if (shift) return shift;
+        }
+        return null;
+    }
+
+    function filterDesiredCoverDropdown() {
+        if (!shiftToSwapSelect || !desiredCoverSelect) return;
+
+        const selectedShiftId = shiftToSwapSelect.value;
+        if (!selectedShiftId) {
+            desiredCoverSelect.innerHTML = '<option value="" disabled selected>Select a potential cover...</option>';
+            return;
+        }
+
+        const selectedShiftDetails = getPersonalShiftDetails(selectedShiftId);
+        if (!selectedShiftDetails) {
+            console.error("Could not find details for selected shift ID:", selectedShiftId);
+            desiredCoverSelect.innerHTML = '<option value="" disabled selected>Error loading cover options.</option>';
+            return;
+        }
+
+        desiredCoverSelect.innerHTML = '<option value="" disabled selected>Select a potential cover...</option>';
+
+        allEligibleStaff.forEach(staff => {
+            if (staff.id === currentUserId) { return; }
+            
+            const hasMatchingRole = staff.roles.some(role => currentUserRoles.includes(role));
+            if (!hasMatchingRole) { return; }
+
+            const covererScheduleForRequestedDay = staffSchedulesForWeek[staff.id] ? staffSchedulesForWeek[staff.id][selectedShiftDetails.shift_date] : [];
+            let conflict = false;
+
+            // All 'Double' variants and 'Split Double' occupy the entire day for conflict checking
+            const fullDayShifts = ['Double', 'Double A', 'Double B', 'Split Double'];
+
+            if (fullDayShifts.includes(selectedShiftDetails.assigned_shift)) {
+                if (covererScheduleForRequestedDay && covererScheduleForRequestedDay.length > 0) { conflict = true; }
+            } else {
+                const requestedTimeSlot = selectedShiftDetails.assigned_shift; 
+                conflict = covererScheduleForRequestedDay.some(covererShift => {
+                    const covererAssignedShift = covererShift.assigned_shift;
+                    return fullDayShifts.includes(covererAssignedShift) || covererAssignedShift === requestedTimeSlot || covererAssignedShift === 'Open'; 
+                });
+            }
+
+            if (!conflict) {
+                const option = document.createElement('option');
+                option.value = staff.id;
+                option.textContent = staff.full_name;
+                desiredCoverSelect.appendChild(option);
+            }
+        });
+    }
+
+    if (shiftToSwapSelect) {
+        shiftToSwapSelect.addEventListener('change', filterDesiredCoverDropdown);
+    }
+
+    if (mainRelinquishShiftBtn) {
+        mainRelinquishShiftBtn.addEventListener('click', function() {
+            populateShiftsToDropdown(shiftToRelinquishSelect, true, false);
+            if (relinquishShiftFormCollapse) { relinquishShiftFormCollapse.show(); }
+            if (swapRequestFormCollapse) { swapRequestFormCollapse.hide(); }
+        });
+    }
+});
+</script>
+{% endblock scripts %}
+{% endblock %}

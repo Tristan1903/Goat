@@ -1,0 +1,362 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard{% endblock %}
+
+{% block content %}
+<header class="dashboard-header">
+    <h1>Welcome, {{ current_user.full_name }}!</h1>
+    <p class="lead mb-0">
+        Your role(s):
+        {% for role in current_user.roles %}
+            {{ role.name.replace('_', ' ').title() }}{% if not loop.last %}, {% endif %}
+        {% endfor %}
+    </p>
+</header>
+
+{# NEW: Suspension Status Display for the current_user (unchanged) #}
+{% if current_user.is_suspended %}
+    <div class="alert alert-warning d-flex align-items-center mb-4" role="alert">
+        <i class="fas fa-ban me-2"></i>
+        <div>
+            Your account is currently suspended. You have limited access.
+            {% if current_user.suspension_end_date %}
+                Your suspension ends on <strong>{{ current_user.suspension_end_date.strftime('%Y-%m-%d') }}</strong>.
+                {% if datetime.utcnow().date() >= current_user.suspension_end_date - timedelta(days=2) %}
+                    You can now <a href="{{ url_for('submit_shifts') }}" class="alert-link">submit your availability</a> for upcoming schedules.
+                {% endif %}
+            {% else %}
+                Your account is suspended indefinitely.
+            {% endif %}
+            {% if current_user.suspension_document_path %}
+                <br><a href="{{ url_for('static', filename='uploads/' + current_user.suspension_document_path) }}" target="_blank" class="alert-link">View Suspension Document</a>
+            {% endif %}
+        </div>
+    </div>
+{% endif %}
+
+<div class="row g-4">
+    {# NEW: Open Shifts for Volunteering (for staff roles) (unchanged) #}
+    {% if current_user.has_role('bartender') or current_user.has_role('waiter') or current_user.has_role('skullers') %}
+        {% if open_shifts_for_volunteering and not current_user.is_suspended %}
+        <div class="col-12">
+            <div class="card shadow-sm border-info">
+                <div class="card-header bg-info text-white"><i class="fas fa-hand-holding-medical me-2"></i>Open Shifts for Volunteering!</div>
+                <div class="list-group list-group-flush">
+                    {% for v_shift in open_shifts_for_volunteering %}
+                    <form action="{{ url_for('volunteer_for_shift') }}" method="post" class="list-group-item d-flex justify-content-between align-items-center">
+                        <input type="hidden" name="volunteered_shift_id" value="{{ v_shift.id }}">
+                        <div>
+                            <i class="fas fa-calendar-alt me-2"></i>
+                            <strong>{{ v_shift.schedule.assigned_shift }}</strong> on {{ v_shift.schedule.shift_date.strftime('%a, %b %d') }}
+                            <small class="text-muted">(Originally {{ v_shift.requester.full_name }})</small>
+                            {% if v_shift.relinquish_reason %}
+                                <div class="small text-muted mt-1 ms-4">Reason: {{ v_shift.relinquish_reason }}</div>
+                            {% endif %}
+                        </div>
+                        <button type="submit" class="btn btn-sm btn-outline-info">Volunteer</button>
+                    </form>
+                    {% endfor %}
+                </div>
+            </div>
+        </div>
+        {% elif not current_user.is_suspended %}
+            <div class="col-12">
+                <div class="card shadow-sm border-secondary">
+                    <div class="card-header bg-secondary text-white"><i class="fas fa-hand-holding-medical me-2"></i>Open Shifts for Volunteering</div>
+                    <div class="card-body">
+                        <p class="card-text text-center text-white-50">No shifts currently open for volunteering that match your role and availability.</p>
+                    </div>
+                </div>
+            </div>
+        {% endif %}
+    {% endif %}
+
+    {# SYSTEM ADMIN VIEW #}
+    {% if current_user.has_role('system_admin') %}
+        <!-- Password Reset Alerts -->
+        {% if password_reset_requests %}
+        <div class="col-12">
+            <div class="card shadow-sm border-danger">
+                <div class="card-header bg-danger text-white"><i class="fas fa-engine-warning me-2"></i>Action Required: Password Reset Requests</div>
+                <div class="list-group list-group-flush">
+                    {% for user in password_reset_requests %}
+                    <div class="list-group-item d-flex justify-content-between align-items-center">
+                        <div>
+                            <i class="fas fa-user-shield me-2"></i>
+                            User <strong>{{ user.full_name }}</strong> ({{ user.username }}) has requested a password reset.
+                        </div>
+                        <a href="{{ url_for('edit_user', user_id=user.id) }}" class="btn btn-sm btn-outline-danger">Reset Password</a>
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+        </div>
+        {% endif %}
+
+        <div class="col-lg-7"> {# Adjusted column size for adding announcement/variance next to it #}
+            <div class="card shadow-sm h-100">
+                <div class="card-header card-header-custom d-flex justify-content-between align-items-center">
+                    <span><i class="fas fa-history me-2"></i>Recent Activity Log</span>
+                    <form action="{{ url_for('clear_all_activity_logs') }}" method="post" class="mb-0">
+                        <button type="submit" class="btn btn-sm btn-outline-danger" onclick="return confirm('Are you sure you want to clear ALL activity logs? This action cannot be undone.')">
+                            <i class="fas fa-eraser me-1"></i>Clear Log
+                        </button>
+                    </form>
+                </div>
+                <div class="card-body" style="overflow-y: auto; max-height: 400px;">
+                    {% if activity_logs %}
+                        <ul class="list-group list-group-flush">
+                            {% for log in activity_logs %}
+                            <li class="list-group-item">
+                                <p class="mb-0"><strong>{{ log.user.full_name }}</strong> ({{ log.user.username }}) {{ log.action }}</p>
+                                <small class="text-muted">{{ log.timestamp | to_local_time }}</small>
+                            </li>
+                            {% endfor %}
+                        </ul>
+                    {% else %}
+                        <p class="text-muted">No recent activity recorded.</p>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+        <div class="col-lg-5"> {# New column for announcements/variance for admin #}
+            <div class="card shadow-sm mb-4" id="latest-announcement-card">
+                <div class="card-header card-header-custom d-flex justify-content-between align-items-center">
+                    <span><i class="fas fa-bullhorn me-2"></i>Latest Announcement</span>
+                    <button type="button" class="btn-close btn-close-white" id="dismiss-announcement-btn" aria-label="Dismiss"></button>
+                </div>
+                <div class="card-body">
+                    {% if latest_announcement %}
+                        <h5 class="card-title">{{ latest_announcement.title }}</h5>
+                        <p class="card-text">{{ latest_announcement.message }}</p>
+                        {% if latest_announcement.action_link %}
+                            <a href="{{ latest_announcement.action_link }}" class="btn btn-sm btn-outline-primary mt-2">
+                                <i class="fas fa-link me-1"></i>View Action
+                            </a>
+                        {% endif %}
+                        <a href="{{ url_for('announcements') }}" class="btn btn-outline-dark mt-2">View All</a>
+                    {% else %}
+                        <p class="card-text">No new announcements.</p>
+                    {% endif %}
+                </div>
+            </div>
+            <div class="card shadow-sm">
+                <div class="card-header card-header-custom"><i class="fas fa-exclamation-triangle me-2"></i>Today's Variance Alerts</div>
+                <div class="card-body">
+                    {% if bod_submitted and variance_alerts is not none %}
+                        {% if variance_alerts %}
+                            <ul class="list-group list-group-flush">
+                                {% for alert in variance_alerts %}
+                                <li class="list-group-item d-flex justify-content-between align-items-center">
+                                    {{ alert.name }}
+                                    {% if alert.variance > 0 %}<span class="badge bg-success rounded-pill">+{{ alert.variance }}</span>
+                                    {% else %}<span class="badge bg-danger rounded-pill">{{ alert.variance }}</span>{% endif %}
+                                </li>
+                                {% endfor %}
+                            </ul>
+                            <div class="d-grid mt-3">
+                                <a href="{{ url_for('variance') }}" class="btn btn-sm btn-outline-dark">View Full Report</a>
+                            </div>
+                        {% else %}
+                            <p class="card-text text-success"><i class="fas fa-check-circle me-2"></i>No variances detected today.</p>
+                        {% endif %}
+                    {% else %}
+                        <p class="card-text text-muted">Complete daily counts to see variance alerts.</p>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+        <div class="col-12 mt-4"> {# Admin Quick Links below activity/announcements #}
+            <div class="card shadow-sm h-100">
+                <div class="card-header card-header-custom"><i class="fas fa-shield-alt me-2"></i>Admin Quick Links</div>
+                <div class="card-body d-grid gap-3">
+                    <a href="{{ url_for('manage_users') }}" class="btn btn-dark"><i class="fas fa-users-cog me-2"></i>Manage Users</a>
+                    <a href="{{ url_for('products') }}" class="btn btn-dark"><i class="fas fa-box-open me-2"></i>Manage Products</a>
+                    <a href="{{ url_for('manage_locations') }}" class="btn btn-dark"><i class="fas fa-map-marker-alt me-2"></i>Manage Locations</a>
+                </div>
+            </div>
+        </div>
+
+
+    {# MANAGER / GENERAL MANAGER VIEW #}
+    {% elif current_user.has_role('manager') or current_user.has_role('general_manager') %}
+        <div class="col-lg-7">
+            <div class="card shadow-sm h-100">
+                <div class="card-header card-header-custom"><i class="fas fa-tasks me-2"></i>Daily Operations</div>
+                <div class="card-body d-flex flex-column">
+                    <p class="card-text">Review and manage today's inventory counts.</p>
+                    <div class="d-grid gap-2 mt-auto">
+                        {% for item in location_statuses %}
+                            {% set loc = item.location_obj %}
+                            {% set status = item.status %}
+                            {% set s_class = 'status-not-started' if status == 'not_started' else 'status-counted' if status == 'counted' else 'status-corrected' %}
+                            {% set s_icon = 'fas fa-list-ol' if status == 'not_started' else 'fas fa-check' if status == 'counted' else 'fas fa-pencil-alt' %}
+                            {% set s_text = 'Start Count' if status == 'not_started' else 'Make Corrections' if status == 'counted' else 'Review Corrected' %}
+                            {% if not bod_submitted %}
+                                <span class="d-grid" data-bs-toggle="tooltip" data-bs-placement="top" title="Please submit 'Beginning of Day' counts first.">
+                                    <a href="#" class="btn status-btn {{ s_class }} disabled" tabindex="-1" aria-disabled="true">
+                                        <i class="{{ s_icon }} me-2"></i><strong>{{ loc.name }}:</strong> {{ s_text }}
+                                    </a>
+                                </span>
+                            {% else %}
+                                <a href="{{ url_for('submit_count', location_slug=loc.name|replace(' ', '_')|lower) }}" class="btn status-btn {{ s_class }}">
+                                    <i class="{{ s_icon }} me-2"></i><strong>{{ loc.name }}:</strong> {{ s_text }}
+                                </a>
+                            {% endif %}
+                        {% endfor %}
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="col-lg-5">
+            <div class="card shadow-sm mb-4" id="latest-announcement-card">
+                <div class="card-header card-header-custom d-flex justify-content-between align-items-center">
+                    <span><i class="fas fa-bullhorn me-2"></i>Latest Announcement</span>
+                    <button type="button" class="btn-close btn-close-white" id="dismiss-announcement-btn" aria-label="Dismiss"></button>
+                </div>
+                <div class="card-body">
+                    {% if latest_announcement %}
+                        <h5 class="card-title">{{ latest_announcement.title }}</h5>
+                        <p class="card-text">{{ latest_announcement.message }}</p>
+                        {% if latest_announcement.action_link %}
+                            <a href="{{ latest_announcement.action_link }}" class="btn btn-sm btn-outline-primary mt-2">
+                                <i class="fas fa-link me-1"></i>View Action
+                            </a>
+                        {% endif %}
+                        <a href="{{ url_for('announcements') }}" class="btn btn-outline-dark mt-2">View All</a>
+                    {% else %}
+                        <p class="card-text">No new announcements.</p>
+                    {% endif %}
+                </div>
+            </div>
+            <div class="card shadow-sm">
+                <div class="card-header card-header-custom"><i class="fas fa-exclamation-triangle me-2"></i>Today's Variance Alerts</div>
+                <div class="card-body">
+                    {% if bod_submitted and variance_alerts is not none %}
+                        {% if variance_alerts %}
+                            <ul class="list-group list-group-flush">
+                                {% for alert in variance_alerts %}
+                                <li class="list-group-item d-flex justify-content-between align-items-center">
+                                    {{ alert.name }}
+                                    {% if alert.variance > 0 %}<span class="badge bg-success rounded-pill">+{{ alert.variance }}</span>
+                                    {% else %}<span class="badge bg-danger rounded-pill">{{ alert.variance }}</span>{% endif %}
+                                </li>
+                                {% endfor %}
+                            </ul>
+                            <div class="d-grid mt-3">
+                                <a href="{{ url_for('variance') }}" class="btn btn-sm btn-outline-dark">View Full Report</a>
+                            </div>
+                        {% else %}
+                            <p class="card-text text-success"><i class="fas fa-check-circle me-2"></i>No variances detected today.</p>
+                        {% endif %}
+                    {% else %}
+                        <p class="card-text text-muted">Complete daily counts to see variance alerts.</p>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+
+    {# BUSINESS OWNER VIEW (New Block) #}
+    {% elif current_user.has_role('owners') %}
+        <div class="col-lg-12">
+            <div class="card shadow-sm mb-4" id="latest-announcement-card">
+                <div class="card-header card-header-custom d-flex justify-content-between align-items-center">
+                    <span><i class="fas fa-bullhorn me-2"></i>Latest Announcement</span>
+                    <button type="button" class="btn-close btn-close-white" id="dismiss-announcement-btn" aria-label="Dismiss"></button>
+                </div>
+                <div class="card-body">
+                    {% if latest_announcement %}
+                        <h5 class="card-title">{{ latest_announcement.title }}</h5>
+                        <p class="card-text">{{ latest_announcement.message }}</p>
+                        {% if latest_announcement.action_link %}
+                            <a href="{{ latest_announcement.action_link }}" class="btn btn-sm btn-outline-primary mt-2">
+                                <i class="fas fa-link me-1"></i>View Action
+                            </a>
+                        {% endif %}
+                        <a href="{{ url_for('announcements') }}" class="btn btn-outline-dark mt-2">View All</a>
+                    {% else %}
+                        <p class="card-text">No new announcements.</p>
+                    {% endif %}
+                </div>
+            </div>
+            <div class="card shadow-sm">
+                <div class="card-header card-header-custom"><i class="fas fa-exclamation-triangle me-2"></i>Today's Variance Alerts</div>
+                <div class="card-body">
+                    {% if bod_submitted and variance_alerts is not none %}
+                        {% if variance_alerts %}
+                            <ul class="list-group list-group-flush">
+                                {% for alert in variance_alerts %}
+                                <li class="list-group-item d-flex justify-content-between align-items-center">
+                                    {{ alert.name }}
+                                    {% if alert.variance > 0 %}<span class="badge bg-success rounded-pill">+{{ alert.variance }}</span>
+                                    {% else %}<span class="badge bg-danger rounded-pill">{{ alert.variance }}</span>{% endif %}
+                                </li>
+                                {% endfor %}
+                            </ul>
+                            <div class="d-grid mt-3">
+                                <a href="{{ url_for('variance') }}" class="btn btn-sm btn-outline-dark">View Full Report</a>
+                            </div>
+                        {% else %}
+                            <p class="card-text text-success"><i class="fas fa-check-circle me-2"></i>No variances detected today.</p>
+                        {% endif %}
+                    {% else %}
+                        <p class="card-text text-muted">Complete daily counts to see variance alerts.</p>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+
+    {# BARTENDER / WAITER / SKULLER VIEW (if not suspended) #}
+    {% elif not current_user.is_suspended %}
+        <div class="col-lg-7">
+            <div class="card shadow-sm h-100">
+                <div class="card-header card-header-custom"><i class="fas fa-clipboard-check me-2"></i>Your Daily Tasks</div>
+                <div class="card-body d-flex flex-column">
+                    <p class="card-text">Complete your inventory counts for each location.</p>
+                    <div class="d-grid gap-2 mt-auto">
+                        {% for item in location_statuses %}
+                            {% set loc = item.location_obj %}
+                            {% set status = item.status %}
+                            {% set s_class = 'status-not-started' if status == 'not_started' else 'status-counted' if status == 'counted' else 'status-corrected' %}
+                            {% set s_icon = 'fas fa-list-ol' if status == 'not_started' else 'fas fa-check' if status == 'counted' else 'fas fa-pencil-alt' %}
+                            {% set s_text = 'Start Count' if status == 'not_started' else 'Make Corrections' if status == 'counted' else 'Review Corrected' %}
+                            {% if not bod_submitted %}
+                                <span class="d-grid" data-bs-toggle="tooltip" data-bs-placement="top" title="A manager must submit 'Beginning of Day' counts first.">
+                                    <a href="#" class="btn status-btn {{ s_class }} disabled" tabindex="-1" aria-disabled="true">
+                                        <i class="{{ s_icon }} me-2"></i><strong>{{ loc.name }}:</strong> {{ s_text }}
+                                    </a>
+                                </span>
+                            {% else %}
+                                <a href="{{ url_for('submit_count', location_slug=loc.name|replace(' ', '_')|lower) }}" class="btn status-btn {{ s_class }}">
+                                    <i class="{{ s_icon }} me-2"></i><strong>{{ loc.name }}:</strong> {{ s_text }}
+                                </a>
+                            {% endif %}
+                        {% endfor %}
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="col-lg-5">
+            <div class="card shadow-sm h-100">
+                <div class="card-header card-header-custom"><i class="fas fa-bullhorn me-2"></i>Latest Announcement</div>
+                <div class="card-body">
+                    {% if latest_announcement %}
+                        <h5 class="card-title">{{ latest_announcement.title }}</h5>
+                        <p class="card-text">{{ latest_announcement.message }}</p>
+                        {# NEW: Action link button for announcement #}
+                        {% if latest_announcement.action_link %}
+                            <a href="{{ latest_announcement.action_link }}" class="btn btn-sm btn-outline-primary mt-2">
+                                <i class="fas fa-calendar-alt me-1"></i>View Schedule
+                            </a>
+                        {% endif %}
+                        <a href="{{ url_for('announcements') }}" class="btn btn-outline-dark mt-2">View All</a>
+                    {% else %}
+                        <p class="card-text">No new announcements.</p>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    {% endif %}
+</div>
+{% endblock %}
+--- END OF FILE dashboard.html ---

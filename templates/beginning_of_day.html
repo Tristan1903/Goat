@@ -1,0 +1,320 @@
+{% extends "base.html" %}
+
+{% block title %}Beginning of Day & Sales Entry{% endblock %}
+
+{% block content %}
+<div class="container mt-4">
+    <div class="card shadow-sm">
+        <div class="card-body p-4 p-md-5">
+            <h2 class="card-title mb-2">Beginning of Day & Sales Entry</h2>
+            <p class="text-muted mb-4">Manage previous day's sales and view today's automatically calculated starting inventory.</p>
+            
+            <form method="POST" enctype="multipart/form-data">
+
+                <!-- Optional CSV Upload Section -->
+                <div class="p-4 rounded-3 mb-5" style="background-color: #f8f9fa;">
+                    <h4 class="mb-3">Optional: Upload Sales CSV (for Products)</h4>
+                    <p class="text-muted">To speed up data entry, you can upload a CSV file with the previous day's sales data for individual products.</p>
+                    <div class="input-group">
+                        <input class="form-control" type="file" id="sales_csv_file" name="sales_csv_file" accept=".csv">
+                        <button type="submit" class="btn btn-secondary" name="action" value="upload_csv" {% if not can_submit_yesterdays_sales %}disabled{% endif %}>Upload and Pre-fill Sales</button>
+                    </div>
+                    {% if not can_submit_yesterdays_sales %}
+                        <div class="form-text text-danger">Upload is disabled because yesterday's Beginning of Day data is missing.</div>
+                    {% else %}
+                        <div class="form-text">The CSV must have two columns: 'Product Name' and 'Quantity Sold'.</div>
+                    {% endif %}
+                </div>
+
+                <!-- Section 1: Today's Calculated Beginning of Day Counts -->
+                <div class="d-flex justify-content-between align-items-center mb-3">
+                    <h4 class="mb-0">Step 1: Today's Automatically Calculated Starting Counts</h4>
+                    <button type="button" class="btn btn-sm btn-outline-secondary" data-bs-toggle="collapse" data-bs-target="#step1Content" aria-expanded="true" aria-controls="step1Content">
+                        <span class="collapse-text-show">Hide Details</span>
+                        <span class="collapse-text-hide d-none">Show Details</span>
+                    </button>
+                </div>
+                <div class="collapse show" id="step1Content">
+                    {% if not can_submit_yesterdays_sales %}
+                        <div class="alert alert-danger" role="alert">
+                            <strong>Missing Data!</strong> Cannot calculate today's Beginning of Day. Please ensure **yesterday's** inventory cycle is complete.
+                            {% if not bod_for_today_already_calculated_and_saved_to_db %}
+                                <br>To start, a manager needs to perform an initial count for {{ yesterday.strftime('%Y-%m-%d') }}.
+                            {% endif %}
+                        </div>
+                    {% elif bod_for_today_already_calculated_and_saved_to_db %}
+                        <div class="alert alert-info" role="alert">
+                            Today's Beginning of Day inventory has already been saved based on {{ yesterday.strftime('%Y-%m-%d') }}'s data.
+                        </div>
+                    {% else %}
+                        <div class="alert alert-success" role="alert">
+                            Today's Beginning of Day inventory will be calculated upon submission of yesterday's sales.
+                        </div>
+                    {% endif %}
+                    <div class="table-responsive mb-5">
+                        <table class="table table-striped align-middle">
+                            <thead class="table-dark">
+                                <tr>
+                                    <th>Product</th>
+                                    <th style="width: 30%;">Calculated On-Hand</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for product in products %}
+                                <tr>
+                                    <td class="fw-bold">{{ product.name }}</td>
+                                    <td>
+                                        {% set unit = product.unit_of_measure|lower %}
+                                        <div class="input-group">
+                                            <input type="text" class="form-control" value="{{ bod_values_to_display.get(product.id, 0.0)|round(2) }}" readonly>
+                                            <span class="input-group-text">{{ product.unit_of_measure }}</span>
+                                        </div>
+                                    </td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- Section 2: Previous Day's Sales -->
+                <h4 class="mb-3">Step 2: Previous Day's Total Sales (Manual Products)</h4>
+                <p class="text-muted">Enter total quantities of individual products sold yesterday.</p>
+                <div class="table-responsive mb-5">
+                    <table class="table table-striped align-middle">
+                        <thead class="table-dark">
+                            <tr>
+                                <th>Product</th>
+                                <th style="width: 30%;">Total Quantity Sold</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for product in products %}
+                            <tr>
+                                <td class="fw-bold">{{ product.name }}</td>
+                                <td>
+                                    {% set unit = product.unit_of_measure|lower %}
+                                    {% set step = '0.01' if 'kg' in unit or 'l' in unit else '1' %}
+                                    <div class="input-group">
+                                        <input type="number" name="sales_{{ product.id }}" class="form-control" min="0" step="{{ step }}" 
+                                            value="{{ sales_from_csv.get(product.id, existing_sales_for_yesterday.get(product.id, 0)) }}"
+                                            {% if not can_submit_yesterdays_sales %}disabled{% endif %}>
+                                        <span class="input-group-text">{{ product.unit_of_measure }}</span>
+                                    </div>
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+
+                <!-- Section 3: Previous Day's Cocktails Sold -->
+                <h4 class="mb-3">Step 3: Previous Day's Cocktails Sold</h4>
+                <p class="text-muted">Enter the number of each cocktail recipe sold yesterday. This will automatically deduct individual ingredients.</p>
+                <div id="cocktails-sold-container">
+                    {% if existing_cocktails_sold_for_yesterday %}
+                        {% for recipe_id, quantity_sold in existing_cocktails_sold_for_yesterday.items() %}
+                            {% set recipe = all_recipes | selectattr('id', 'equalto', recipe_id) | first %}
+                            {% if recipe %}
+                            <div class="input-group mb-2 cocktail-sold-row">
+                                <select class="form-select cocktail-select" name="cocktail_recipe_id[]" required {% if not can_submit_yesterdays_sales %}disabled{% endif %}>
+                                    <option value="" disabled>Select a cocktail recipe...</option>
+                                    {% for r in all_recipes %}<option value="{{ r.id }}" {% if r.id == recipe_id %}selected{% endif %}>{{ r.name }}</option>{% endfor %}
+                                </select>
+                                <input type="number" step="1" min="0" class="form-control quantity-sold-input" name="cocktail_quantity_sold[]" placeholder="Quantity Sold" required value="{{ quantity_sold }}" {% if not can_submit_yesterdays_sales %}disabled{% endif %}>
+                                <button type="button" class="btn btn-outline-danger remove-cocktail-sold" {% if not can_submit_yesterdays_sales %}disabled{% endif %}><i class="fas fa-trash"></i></button>
+                            </div>
+                            {% endif %}
+                        {% endfor %}
+                    {% else %}
+                        <div class="input-group mb-2 cocktail-sold-row">
+                            <select class="form-select cocktail-select" name="cocktail_recipe_id[]" required {% if not can_submit_yesterdays_sales %}disabled{% endif %}>
+                                <option value="" disabled selected>Select a cocktail recipe...</option>
+                                {% for recipe in all_recipes %}<option value="{{ recipe.id }}">{{ recipe.name }}</option>{% endfor %}
+                            </select>
+                            <input type="number" step="1" min="0" class="form-control quantity-sold-input" name="cocktail_quantity_sold[]" placeholder="Quantity Sold" required {% if not can_submit_yesterdays_sales %}disabled{% endif %}>
+                            <button type="button" class="btn btn-outline-danger remove-cocktail-sold" {% if not can_submit_yesterdays_sales %}disabled{% endif %}><i class="fas fa-trash"></i></button>
+                        </div>
+                    {% endif %}
+                </div>
+                <button type="button" id="add-cocktail-sold-btn" class="btn btn-outline-secondary btn-sm mt-2" {% if not can_submit_yesterdays_sales %}disabled{% endif %}><i class="fas fa-plus"></i> Add Another Cocktail</button>
+                <div class="form-text mb-4">Leave quantity as 0 if a cocktail was not sold.</div>
+                <!-- --- END NEW SECTION --- -->
+
+                <div class="d-grid mt-4">
+                    <button type="submit" class="btn btn-primary btn-lg" name="action" value="submit_bod" {% if not can_submit_yesterdays_sales or bod_for_today_already_calculated_and_saved_to_db %}disabled{% endif %}>Submit Sales and Calculate Today's BOD</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+{% block scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    // --- Step 1 Collapse Toggle Logic ---
+    const step1CollapseBtn = document.querySelector('button[data-bs-target="#step1Content"]');
+    const step1Content = document.getElementById('step1Content');
+    const collapseTextShow = step1CollapseBtn ? step1CollapseBtn.querySelector('.collapse-text-show') : null;
+    const collapseTextHide = step1CollapseBtn ? step1CollapseBtn.querySelector('.collapse-text-hide') : null;
+
+    if (step1CollapseBtn && step1Content) {
+        step1Content.addEventListener('show.bs.collapse', function () {
+            if (collapseTextShow) { collapseTextShow.classList.add('d-none'); }
+            if (collapseTextHide) { collapseTextHide.classList.remove('d-none'); }
+        });
+        step1Content.addEventListener('hide.bs.collapse', function () {
+            if (collapseTextShow) { collapseTextShow.classList.remove('d-none'); } // Show "Hide Details" when expanded
+            if (collapseTextHide) { collapseTextHide.classList.add('d-none'); } // Hide "Show Details" when expanded
+        });
+        // Initial state update for button text if content starts collapsed
+        if (!step1Content.classList.contains('show')) {
+             if (collapseTextShow) { collapseTextShow.classList.add('d-none'); }
+             if (collapseTextHide) { collapseTextHide.classList.remove('d-none'); }
+        }
+    }
+
+    // --- Dynamic Cocktails Sold Input ---
+    const cocktailsSoldContainer = document.getElementById('cocktails-sold-container');
+    const addCocktailSoldBtn = document.getElementById('add-cocktail-sold-btn');
+    const allRecipes = JSON.parse('{{ all_recipes_json | tojson | safe }}'); 
+
+    const recipeOptionsHtml = allRecipes.map(recipe => 
+        `<option value="${recipe.id}">${recipe.name}</option>`
+    ).join('');
+
+    function addCocktailSoldRow(selectedRecipeId = '', quantity = '') {
+        const newRow = document.createElement('div');
+        newRow.className = 'input-group mb-2 cocktail-sold-row';
+        newRow.innerHTML = `
+            <select class="form-select cocktail-select" name="cocktail_recipe_id[]" required {% if not can_submit_yesterdays_sales %}disabled{% endif %}>
+                <option value="" disabled selected>Select a cocktail recipe...</option>
+                ${recipeOptionsHtml}
+            </select>
+            <input type="number" step="1" min="0" class="form-control quantity-sold-input" name="cocktail_quantity_sold[]" placeholder="Quantity Sold" required value="${quantity}" {% if not can_submit_yesterdays_sales %}disabled{% endif %}>
+            <button type="button" class="btn btn-outline-danger remove-cocktail-sold" {% if not can_submit_yesterdays_sales %}disabled{% endif %}><i class="fas fa-trash"></i></button>
+        `;
+        cocktailsSoldContainer.appendChild(newRow);
+
+        if (selectedRecipeId) {
+            newRow.querySelector('.cocktail-select').value = String(selectedRecipeId);
+        }
+
+        newRow.querySelector('.cocktail-select').addEventListener('change', refreshCocktailOptions);
+        refreshCocktailOptions();
+    }
+
+    function getSelectedCocktailIds() {
+        return Array.from(cocktailsSoldContainer.querySelectorAll('.cocktail-select'))
+            .map(select => select.value)
+            .filter(value => value && value !== '');
+    }
+
+    function refreshCocktailOptions() {
+        const selectedIds = getSelectedCocktailIds();
+        
+        cocktailsSoldContainer.querySelectorAll('.cocktail-select').forEach(select => {
+            const currentValue = select.value;
+            const isDisabledByBackend = select.disabled; 
+
+            select.innerHTML = `<option value="" disabled ${currentValue === "" ? "selected" : ""}>Select a cocktail recipe...</option>` + recipeOptionsHtml;
+
+            if (currentValue && selectedIds.includes(currentValue)) {
+                select.value = currentValue;
+            } else if (currentValue !== "") { 
+                 select.value = '';
+                 select.querySelector('option[value=""]').selected = true;
+            }
+
+            selectedIds.forEach(selectedId => {
+                if (selectedId !== currentValue) {
+                    const optionToDisable = select.querySelector(`option[value="${selectedId}"]`);
+                    if (optionToDisable) {
+                        optionToDisable.disabled = true;
+                    }
+                }
+            });
+
+            if (isDisabledByBackend) { // Re-apply disabled state from Jinja after refreshing options
+                select.disabled = true;
+                select.closest('.input-group').querySelector('.quantity-sold-input').disabled = true;
+                select.closest('.input-group').querySelector('.remove-cocktail-sold').disabled = true;
+            }
+        });
+    }
+
+    const oldCocktailRecipeIds = {{ request.form.getlist('cocktail_recipe_id[]') | tojson | safe }};
+    const oldCocktailQuantities = {{ request.form.getlist('cocktail_quantity_sold[]') | tojson | safe }};
+    const existingCocktailsData = Object.entries({{ existing_cocktails_sold_for_yesterday | tojson | safe }});
+
+    if (oldCocktailRecipeIds.length > 0) {
+        cocktailsSoldContainer.innerHTML = '';
+        oldCocktailRecipeIds.forEach((id, index) => addCocktailSoldRow(id, oldCocktailQuantities[index] || ''));
+    } else if (existingCocktailsData.length > 0) {
+        cocktailsSoldContainer.innerHTML = '';
+        existingCocktailsData.forEach(([id, quantity]) => addCocktailSoldRow(id, quantity));
+    } else if (cocktailsSoldContainer.children.length === 0) {
+        addCocktailSoldRow();
+    }
+    refreshCocktailOptions();
+
+    if (addCocktailSoldBtn && !addCocktailSoldBtn.dataset.bound) {
+        addCocktailSoldBtn.addEventListener('click', () => addCocktailSoldRow());
+        addCocktailSoldBtn.dataset.bound = 'true';
+    }
+
+    cocktailsSoldContainer.addEventListener('click', function(event) {
+        if (event.target.closest('.remove-cocktail-sold')) {
+            const rowToRemove = event.target.closest('.cocktail-sold-row');
+            if (!rowToRemove) return;
+
+            if (cocktailsSoldContainer.children.length > 1) {
+                rowToRemove.remove();
+            } else {
+                const lastRowSelect = rowToRemove.querySelector('.cocktail-select');
+                const lastRowQuantity = rowToRemove.querySelector('.quantity-sold-input');
+                if (lastRowSelect) {
+                    lastRowSelect.value = '';
+                    lastRowSelect.querySelector('option[value=""]').selected = true;
+                }
+                if (lastRowQuantity) {
+                    lastRowQuantity.value = '';
+                }
+            }
+            refreshCocktailOptions();
+        }
+    });
+
+    cocktailsSoldContainer.querySelectorAll('.cocktail-select').forEach(select => {
+        select.addEventListener('change', refreshCocktailOptions);
+    });
+
+    // --- Disable/Enable form elements based on can_submit_yesterdays_sales ---
+    const canSubmitSales = {{ can_submit_yesterdays_sales | tojson | safe }}; // Renamed for clarity
+    const submitButton = document.querySelector('button[name="action"][value="submit_bod"]');
+    const csvUploadButton = document.querySelector('button[name="action"][value="upload_csv"]');
+    const salesInputs = document.querySelectorAll('input[name^="sales_"]');
+    const addCocktailButton = document.getElementById('add-cocktail-sold-btn');
+
+    const allCocktailRows = cocktailsSoldContainer.querySelectorAll('.cocktail-sold-row');
+    allCocktailRows.forEach(row => {
+        const select = row.querySelector('.cocktail-select');
+        const quantityInput = row.querySelector('.quantity-sold-input');
+        const removeButton = row.querySelector('.remove-cocktail-sold');
+        if (!canSubmitSales) {
+            if (select) select.disabled = true;
+            if (quantityInput) quantityInput.disabled = true;
+            if (removeButton) removeButton.disabled = true;
+        }
+    });
+
+    if (!canSubmitSales) {
+        if (submitButton) submitButton.disabled = true;
+        if (csvUploadButton) csvUploadButton.disabled = true;
+        salesInputs.forEach(input => input.disabled = true);
+        if (addCocktailButton) addCocktailButton.disabled = true;
+    } 
+});
+</script>
+{% endblock scripts %}
+{% endblock %}

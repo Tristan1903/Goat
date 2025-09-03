@@ -1,0 +1,18 @@
+<div class="p-3 mb-4 rounded-3" style="background-color: #f8f9fa;">
+    <div class="row g-2 align-items-center">
+        <div class="col-sm-8">
+            <div class="input-group">
+                <span class="input-group-text"><i class="fas fa-search"></i></span>
+                <input type="text" id="product-search" class="form-control" placeholder="Search by product name...">
+            </div>
+        </div>
+        <div class="col-sm-4">
+            <select id="type-filter" class="form-select">
+                <option value="all">All Types</option>
+                {% for type in product_types %}
+                    <option value="{{ type }}">{{ type }}</option>
+                {% endfor %}
+            </select>
+        </div>
+    </div>
+</div>

@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+
+{% block title %}Add New User{% endblock %}
+
+{% block content %}
+<div class="container mt-4">
+    <div class="row justify-content-center">
+        <div class="col-lg-8">
+            <div class="card shadow-sm">
+                <div class="card-body p-4 p-md-5">
+                    <h2 class="card-title mb-2">Add New User</h2>
+                    <p class="text-muted mb-4">Create a new user account.</p>
+                    <form action="{{ url_for('add_user') }}" method="POST">
+                        <div class="mb-3">
+                            <label for="full_name" class="form-label">Full Name</label>
+                            <input type="text" id="full_name" name="full_name" class="form-control" required>
+                        </div>
+                        <div class="mb-3">
+                            <label for="username" class="form-label">Username (for login)</label>
+                            <input type="text" id="username" name="username" class="form-control" required>
+                        </div>
+                        <div class="mb-3">
+                            <label for="password" class="form-label">Password</label>
+                            <div class="input-group">
+                                <div class="form-floating flex-grow-1">
+                                    <input type="password" id="password" name="password" class="form-control" placeholder="Password" required>
+                                    <label for="password">Password</label>
+                                </div>
+                                <button class="btn btn-outline-secondary password-toggle-btn" type="button"><i class="fas fa-eye"></i></button>
+                            </div>
+                        </div>
+                        
+                        <div class="mb-3">
+                            <label class="form-label">Assign Roles</label>
+                            
+                            {% set creatable_roles = all_roles %}
+                            {# If the current user is a manager, filter the list to only show specific roles #}
+                            {% if current_user.has_role('manager') and not (current_user.has_role('system_admin') or current_user.has_role('general_manager')) %}
+                                {# Ensure 'skullers' is included in the roles a non-admin manager can create #}
+                                {% set creatable_roles = all_roles|selectattr("name", "in", ["bartender", "waiter", "skullers"]) %} 
+                            {% endif %}
+                            
+                            {% for role in creatable_roles %}
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" name="roles" value="{{ role.name }}" id="role-{{ role.name }}"                        
+                                <label class="form-check-label" for="role-{{ role.name }}">
+                                    {{ role.name.replace('_', ' ').title() }}
+                                </label>
+                            </div>
+                            {% endfor %}
+                        </div>
+
+                        <div class="d-grid gap-2 d-md-flex justify-content-md-end mt-4">
+                            <a href="{{ url_for('manage_users') }}" class="btn btn-secondary me-md-2">Cancel</a>
+                            <button type="submit" class="btn btn-primary">Create User</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

@@ -1,0 +1,70 @@
+{# This template is intended to be loaded dynamically into a Bootstrap modal for suspension controls #}
+
+<div class="modal-header">
+    <h5 class="modal-title" id="suspendUserModalLabel">Manage Suspension for {{ user.full_name }}</h5>
+    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+</div>
+<form action="{{ url_for('edit_user', user_id=user.id) }}" method="POST" enctype="multipart/form-data" id="suspend-user-form">
+    <div class="modal-body">
+        <p><strong>User:</strong> {{ user.full_name }} ({{ user.username }})</p>
+        <p class="text-muted small">
+            Current Status: 
+            {% if user.is_suspended %}
+                <strong class="text-danger">Suspended</strong> 
+                {% if user.suspension_end_date %}(until {{ user.suspension_end_date.strftime('%Y-%m-%d') }}){% endif %}
+            {% else %}
+                <strong class="text-success">Active</strong>
+            {% endif %}
+        </p>
+        <hr>
+
+        <div class="mb-3">
+            <label for="suspension_end_date" class="form-label">Suspension End Date (Optional)</label>
+            <input type="date" id="suspension_end_date" name="suspension_end_date" class="form-control"
+                   value=""                   
+            <div class="form-text">Set an end date for temporary suspension. Leave blank for indefinite.</div>
+        </div>
+        
+        <div class="mb-3">
+            <label for="suspension_document" class="form-label">Suspension Document (Optional)</label>
+            <input class="form-control" type="file" id="suspension_document" name="suspension_document" accept=".pdf, .doc, .docx, image/*">
+            {% if user.suspension_document_path %}
+                <div class="form-text mt-2">
+                    Current document: <a href="{{ url_for('static', filename='uploads/' + user.suspension_document_path.split('/')[-1]) }}" target="_blank">View Current Document</a>
+                    <div class="form-check">
+                        <input class="form-check-input" type="checkbox" id="delete_suspension_document" name="delete_suspension_document" value="1">
+                        <label class="form-check-label" for="delete_suspension_document">Delete Current Document</label>
+                    </div>
+                </div>
+            {% else %}
+                <div class="form-text">Upload a document (e.g., HR letter) related to the suspension.</div>
+            {% endif %}
+        </div>
+        
+    </div>
+    <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+        {% if user.is_suspended %}
+            <button type="submit" class="btn btn-warning text-dark" name="action" value="update_suspension_details">Update Suspension Details</button>
+        {% else %}
+            <button type="submit" class="btn btn-danger" name="action" value="suspend_user">Suspend User</button>
+        {% endif %}
+    </div>
+</form>
+
+<script>
+    // Enable/disable suspension_end_date based on whether user is being suspended or just updating
+    document.addEventListener('DOMContentLoaded', function() {
+        const suspensionEndDateInput = document.getElementById('suspension_end_date');
+        const suspendUserBtn = document.querySelector('button[name="action"][value="suspend_user"]');
+        
+        if (suspendUserBtn && suspensionEndDateInput) {
+            // When 'Suspend User' button is visible, enable the date input.
+            // This script block runs only when modal content is loaded.
+            suspensionEndDateInput.disabled = false;
+        } else if (!suspendUserBtn && suspensionEndDateInput && !{{ user.is_suspended | tojson }}) {
+             // If user is not suspended and no suspend button (i.e., only update button), date input is disabled by default
+             suspensionEndDateInput.disabled = true;
+        }
+    });
+</script>

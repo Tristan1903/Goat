@@ -1,0 +1,206 @@
+{% extends "base.html" %}
+
+{% block title %}Daily Count Variance Report{% endblock %}
+
+{% block content %}
+<div class="container mt-4">
+    <div class="card shadow-sm">
+        <div class="card-body p-4 p-md-5">
+
+            <div class="d-flex justify-content-between align-items-center mb-2">
+                <div>
+                    <h2 class="card-title mb-0">Daily Count Variance Report ({{ report_date_str }})</h2>
+                    <p class="text-muted mb-0">Analyzes actual counts against expected inventory levels, including any explanations.</p>
+                </div>
+                <a href="{{ url_for('export_variance', date=report_date_str) }}" class="btn btn-outline-secondary">
+                    <i class="fas fa-file-csv me-2"></i>Export to CSV
+                </a>
+            </div>
+            <hr class="mt-2 mb-4">
+
+            {# Date filter #}
+            <div class="p-3 mb-4 rounded-3" style="background-color: #f8f9fa;">
+                <form method="GET" action="{{ url_for('variance') }}" class="row g-2 align-items-center">
+                    <div class="col-md-auto">
+                        <label for="reportDate" class="col-form-label">Select Date:</label>
+                    </div>
+                    <div class="col-md-auto">
+                        <input type="date" id="reportDate" name="date" class="form-control" value="{{ report_date_str }}">
+                    </div>
+                    <div class="col-md-auto">
+                        <button type="submit" class="btn btn-primary">Go</button>
+                    </div>
+                </form>
+            </div>
+            {# End Date filter #}
+
+
+            {% if not variance_data %}
+                <div class="alert alert-info" role="alert">
+                    No significant variances found for {{ report_date_str }}. This report shows items with non-zero variance (Actual vs. Expected) or where Correction Count differed from First Count.
+                </div>
+            {% else %}
+                <div class="table-responsive">
+                    <div class="table-responsive-lg">
+                        <table class="table table-striped table-hover align-middle">
+                            <thead class="table-dark">
+                                <tr>
+                                    <th>Location</th>
+                                    <th>Product</th>
+                                    <th>First Count</th>
+                                    <th>Correction Count</th>
+                                    <th>Expected Amount</th>
+                                    <th>Variance (Actual - Expected)</th>
+                                    <th>Explanation</th>
+                                    <th>Explained By</th>
+                                    <th>Action</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for item in variance_data %}
+                                    {% set actual_variance = item.variance_amount %}
+                                    {% set expected = item.expected_amount %}
+                                    <tr>
+                                        <td class="fw-bold">{{ item.location }}</td>
+                                        <td>{{ item.product_name }} ({{ item.product_unit }})</td>
+                                        <td>{{ item.first_count_amount|round(2) if item.first_count_amount is not none else 'N/A' }} <small class="text-muted d-block">by {{ item.first_count_by or 'N/A' }}</small></td>
+                                        <td>
+                                            {% if item.correction_amount is not none %}
+                                                <strong>{{ item.correction_amount|round(2) }}</strong> <small class="text-muted d-block">by {{ item.correction_by or 'N/A' }}</small>
+                                            {% else %}
+                                                <span class="text-muted small">No correction</span>
+                                            {% endif %}
+                                        </td>
+                                        <td>
+                                            {{ expected|round(2) if expected is not none else 'N/A' }}
+                                        </td>
+                                        <td>
+                                            {% if actual_variance is not none %}
+                                                {% set variance_val = actual_variance|round(2) %}
+                                                {% if variance_val > 0 %}
+                                                    <strong class="text-success">+{{ variance_val }}</strong>
+                                                {% elif variance_val < 0 %}
+                                                    <strong class="text-danger">{{ variance_val }}</strong>
+                                                {% else %}
+                                                    <span class="text-muted">0</span>
+                                                {% endif %}
+                                            {% else %}
+                                                <span class="text-muted">N/A</span>
+                                            {% endif %}
+                                        </td>
+                                        <td>
+                                            {% if item.explanation %}
+                                                <small>{{ item.explanation|truncate(50, True) }}</small>
+                                            {% else %}
+                                                <span class="text-muted small">No explanation</span>
+                                            {% endif %}
+                                        </td>
+                                        <td>
+                                            {% if item.explanation_by %}
+                                                <small>{{ item.explanation_by }}</small>
+                                            {% else %}
+                                                <span class="text-muted small">N/A</span>
+                                            {% endif %}
+                                        </td>
+                                        <td>
+                                            {% if item.count_id_for_explanation %}
+                                            <button type="button" class="btn btn-sm btn-outline-info explain-variance-btn" 
+                                                    data-bs-toggle="modal" data-bs-target="#varianceExplanationModal" 
+                                                    data-count-id="{{ item.count_id_for_explanation }}">
+                                                {% if item.explanation %}Edit{% else %}Explain{% endif %}
+                                            </button>
+                                            {% endif %}
+                                            {# NEW: Request Recount Button #}
+                                            {% if current_user.has_role('manager') or current_user.has_role('general_manager') or current_user.has_role('system_admin') %}
+                                                <form action="{{ url_for('request_recount') }}" method="post" class="d-inline ms-2">
+                                                    {# Pass product_id and/or location_id as hidden inputs #}
+                                                    <input type="hidden" name="product_id" value="{{ item.product_id }}">
+                                                    {# You might need location_id from the item if it's available, assuming product_id and location name are in item #}
+                                                    {# If item only has location name, you might need to query location.id in JS or Python #}
+                                                    {% set location_obj = all_locations | selectattr('name', 'equalto', item.location) | first %}
+                                                    {% if location_obj %}<input type="hidden" name="location_id" value="{{ location_obj.id }}">{% endif %}
+                                                    <button type="submit" class="btn btn-sm btn-outline-warning" 
+                                                            onclick="return confirm('Are you sure you want to request a recount for {{ item.product_name }} in {{ item.location }}? This will notify staff.')">
+                                                        <i class="fas fa-redo me-1"></i>Recount
+                                                    </button>
+                                                </form>
+                                            {% endif %}
+                                        </td>
+                                    </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            {% endif %}
+        </div>
+    </div>
+</div>
+
+{# Bootstrap Modal Structure for Variance Explanation (unchanged) #}
+<div class="modal fade" id="varianceExplanationModal" tabindex="-1" aria-labelledby="varianceExplanationModalLabel" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content">
+      {# Content will be loaded here dynamically #}
+    </div>
+  </div>
+</div>
+
+{% block scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const varianceExplanationModal = document.getElementById('varianceExplanationModal');
+    if (varianceExplanationModal) {
+        varianceExplanationModal.addEventListener('show.bs.modal', async function (event) {
+            const button = event.relatedTarget; 
+            const countId = button.dataset.countId; 
+
+            if (countId) {
+                const modalContent = varianceExplanationModal.querySelector('.modal-content');
+                try {
+                    const response = await fetch(`/explain_variance/${countId}`);
+                    if (response.ok) {
+                        modalContent.innerHTML = await response.text();
+                        // Re-attach event listener for the form inside the modal
+                        const form = modalContent.querySelector('form');
+                        if (form) {
+                            form.addEventListener('submit', async function(e) {
+                                e.preventDefault();
+                                const formData = new FormData(form);
+                                const postResponse = await fetch(form.action, {
+                                    method: 'POST',
+                                    body: formData
+                                });
+                                // Assuming Flask always redirects or re-renders, not JSON for this POST
+                                // For successful post, close modal and reload page
+                                if (postResponse.ok && postResponse.redirected) {
+                                     // Flash message will be handled by Flask redirect.
+                                    window.location.href = postResponse.url; // Follow the redirect
+                                } else if (postResponse.status === 200 && postResponse.headers.get('Content-Type').includes('text/html')) {
+                                    // If it re-rendered the modal content due to error (status 200 but not redirected)
+                                    modalContent.innerHTML = await postResponse.text();
+                                } else {
+                                    // Handle unexpected response (e.g., JSON error)
+                                    const errorText = await postResponse.text();
+                                    console.error("Unexpected response from explain_variance POST:", errorText);
+                                    modalContent.innerHTML = `<div class="modal-header"><h5 class="modal-title">Error</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div><div class="modal-body text-danger">An unexpected error occurred during submission.</div>`;
+                                }
+                            });
+                        }
+                    } else {
+                        modalContent.innerHTML = `<div class="modal-header"><h5 class="modal-title">Error</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div><div class="modal-body text-danger">Failed to load explanation form. Status: ${response.status}</div>`;
+                    }
+                } catch (error) {
+                    modalContent.innerHTML = `<div class="modal-header"><h5 class="modal-title">Error</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div><div class="modal-body text-danger">An error occurred: ${error.message}</div>`;
+                    console.error("Error loading variance explanation modal content:", error);
+                }
+            }
+        });
+        varianceExplanationModal.addEventListener('hidden.bs.modal', function () {
+            this.querySelector('.modal-content').innerHTML = '';
+        });
+    }
+});
+</script>
+{% endblock scripts %}
+{% endblock %}

@@ -1,0 +1,41 @@
+📦Goat
+ ┣ 📂instance
+ ┃ ┗ 📜site.db
+ ┣ 📂static
+ ┃ ┣ 📜logo.avif
+ ┃ ┣ 📜logo.ico
+ ┃ ┗ 📜styles.css
+ ┣ 📂templates
+ ┃ ┣ 📜active_users.html
+ ┃ ┣ 📜add_recipe.html
+ ┃ ┣ 📜add_user.html
+ ┃ ┣ 📜announcements.html
+ ┃ ┣ 📜assign_products.html
+ ┃ ┣ 📜base.html
+ ┃ ┣ 📜beginning_of_day.html
+ ┃ ┣ 📜change_password.html
+ ┃ ┣ 📜count.html
+ ┃ ┣ 📜daily_summary.html
+ ┃ ┣ 📜dashboard.html
+ ┃ ┣ 📜edit_product.html
+ ┃ ┣ 📜edit_recipe.html
+ ┃ ┣ 📜edit_user.html
+ ┃ ┣ 📜historical_report.html
+ ┃ ┣ 📜leave_requests.html
+ ┃ ┣ 📜locations.html
+ ┃ ┣ 📜login.html
+ ┃ ┣ 📜manage_swaps.html
+ ┃ ┣ 📜manage_users.html
+ ┃ ┣ 📜my_schedule.html
+ ┃ ┣ 📜products.html
+ ┃ ┣ 📜recipes.html
+ ┃ ┣ 📜reports.html
+ ┃ ┣ 📜reset_request.html
+ ┃ ┣ 📜scheduler.html
+ ┃ ┣ 📜scheduler_role.html
+ ┃ ┣ 📜submit_shifts.html
+ ┃ ┣ 📜user_manual.html
+ ┃ ┣ 📜variance.html
+ ┃ ┗ 📜_filter_bar.html
+ ┣ 📜app.py
+ ┗ 📜requirements.txt

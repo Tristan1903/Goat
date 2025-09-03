@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+
+{% block title %}Edit User{% endblock %}
+
+{% block content %}
+<div class="container mt-4">
+    <div class="row justify-content-center">
+        <div class="col-lg-8">
+            <div class="card shadow-sm">
+                <div class="card-body p-4 p-md-5">
+                    <h2 class="card-title mb-2">Edit User</h2>
+                    <p class="text-muted mb-4">Update details for {{ user.full_name }}.</p>
+                    <form action="{{ url_for('edit_user', user_id=user.id) }}" method="POST" enctype="multipart/form-data" id="edit-user-details-form">
+                        <div class="mb-3">
+                            <label for="full_name" class="form-label">Full Name</label>
+                            <input type="text" id="full_name" name="full_name" class="form-control" value="{{ user.full_name }}" required {% if is_limited_view %}disabled{% endif %}>
+                        </div>
+                        <div class="mb-3">
+                            <label for="username" class="form-label">Username</label>
+                            <input type="text" id="username" name="username" class="form-control" value="{{ user.username }}" required {% if is_limited_view %}disabled{% endif %}>
+                        </div>
+                        
+                        <div class="mb-3">
+                            <label class="form-label">Assign Roles</label>
+                            {% for role in all_roles %}
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" name="roles" value="{{ role.name }}" id="role-{{ role.name }}"
+                                       {% if role.name in user_role_names %}checked{% endif %} 
+                                       {% if is_limited_view and role.name not in ["bartender", "waiter", "skullers"] %}disabled{% endif %}> 
+                                <label class="form-check-label" for="role-{{ role.name }}">
+                                    {{ role.name.replace('_', ' ').title() }}
+                                </label>
+                            </div>
+                            {% endfor %}
+                        </div>
+                        
+                        {# Business Owner cannot change passwords #}
+                        {% if not is_limited_view %}
+                        <hr class="my-4">
+                        <p class="text-muted">Only fill out the password field below if you want to change the user's password.</p>
+                        <div class="mb-3">
+                            <label for="password" class="form-label">New Password (Optional)</label>
+                            <div class="input-group">
+                                <div class="form-floating flex-grow-1">
+                                    <input type="password" id="password" name="password" class="form-control" placeholder="New Password">
+                                    <label for="password">New Password</label>
+                                </div>
+                                <button class="btn btn-outline-secondary password-toggle-btn" type="button"><i class="fas fa-eye"></i></button>
+                            </div>
+                        </div>
+                        {% endif %}
+
+                        <div class="d-grid gap-2 d-md-flex justify-content-md-end mt-4">
+                            <a href="{{ url_for('manage_users') }}" class="btn btn-secondary me-md-2">Cancel</a>
+                            <button type="submit" class="btn btn-primary" {% if is_limited_view %}disabled{% endif %}>Update User Details</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

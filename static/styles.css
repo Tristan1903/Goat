@@ -1,0 +1,406 @@
+/* === General Body & Font Styling === */
+/* NEW: General box-sizing for more predictable layout calculations */
+html {
+    box-sizing: border-box;
+}
+*, *::before, *::after {
+    box-sizing: inherit;
+}
+body {
+    background-color: rgb(0 71 49); /* <-- YOUR NEW BACKGROUND COLOR */
+    font-family: 'Inter', sans-serif;
+    color: #343a40;
+    /* Removed overflow-x: hidden from body here as per request.
+       Layout adjustments in media query should prevent it. */
+}
+
+/* === Custom Navbar Styling === */
+.custom-navbar {
+    background-color: rgb(48, 12, 16) !important;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    position: sticky; /* Default for desktop */
+    top: 0;
+    z-index: 1030;
+}
+
+
+.custom-navbar .nav-link {
+    color: white !important;
+    font-weight: 500;
+    transition: background-color 0.2s ease-in-out;
+}
+
+.custom-navbar .nav-link:hover {
+    color: #f0f0f0 !important;
+    background-color: rgba(255, 255, 255, 0.1);
+    border-radius: 0.25rem;
+}
+
+.custom-navbar .nav-link.active {
+    font-weight: bold;
+}
+
+/* General dropdown menus in navbar (e.g., Schedules, Inventory, Management) */
+.custom-navbar .dropdown-menu {
+    background-color: rgba(48, 12, 16, 0.98); /* Keep other dropdowns dark */
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 0.5rem;
+    /* No max-height/overflow-y on desktop dropdowns. */
+}
+
+.custom-navbar .dropdown-item {
+    color: white;
+    transition: background-color 0.2s ease-in-out;
+}
+
+.custom-navbar .dropdown-item:hover {
+    background-color: rgba(255, 255, 255, 0.1);
+    color: white;
+}
+
+/* Specific styling for the Notification Dropdown menu */
+.navbar-nav.ms-auto .dropdown-menu-end {
+    background-color: white !important; /* Set background to white */
+    border: 1px solid #dee2e6; /* Adjust border for light background */
+    box-shadow: 0 0.5rem 1rem rgba(0,0,0,0.15); /* Add subtle shadow */
+    /* No max-height/overflow-y on desktop notification dropdown. */
+}
+
+/* Adjust dropdown items within the white notification menu */
+.navbar-nav.ms-auto .dropdown-menu-end .dropdown-item {
+    color: #343a40; /* Darker text for white background */
+}
+
+.navbar-nav.ms-auto .dropdown-menu-end .dropdown-item:hover {
+    background-color: #f8f9fa; /* Light hover effect */
+    color: #343a40;
+}
+
+.navbar-nav.ms-auto .dropdown-menu-end .dropdown-header {
+    color: #6c757d; /* Muted text for header */
+}
+
+/* === Card Styling === */
+.card {
+    border: none;
+    border-radius: 0.75rem;
+    transition: box-shadow 0.3s ease, transform 0.3s ease;
+}
+
+.card:hover {
+    transform: translateY(-5px);
+    box-shadow: 0 0.5rem 1rem rgba(0,0,0,0.15)!important;
+}
+
+.card-title {
+    font-weight: 700;
+}
+
+.card-body {
+    background-color: white;
+}
+
+/* === Form & Input Styling === */
+.form-group label {
+    font-weight: 600;
+    margin-bottom: 0.5rem;
+}
+
+.form-control, .form-select {
+    border-radius: 0.5rem;
+    border: 1px solid #ced4da;
+    transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.form-control:focus, .form-select:focus {
+    border-color: rgb(48, 12, 16);
+    box-shadow: 0 0 0 0.25rem rgba(48, 12, 16, 0.25);
+}
+
+/* === Button Styling === */
+.btn {
+    border-radius: 0.5rem;
+    font-weight: 600;
+    padding: 0.75rem 1.25rem;
+    transition: all 0.2s ease-in-out;
+}
+
+.btn-primary {
+    background-color: #0d6efd;
+    border-color: #0d6efd;
+}
+
+.btn-primary:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+}
+
+/* === Table Styling === */
+.table {
+    border-radius: 0.75rem;
+    overflow: hidden; /* Ensures the border radius is applied to the table corners */
+}
+
+.table thead {
+    background-color: #343a40;
+    color: white;
+}
+
+.table th {
+    padding: 1rem;
+}
+
+.table td {
+    padding: 1rem;
+    vertical-align: middle;
+}
+
+.table-hover tbody tr:hover {
+    background-color: #e9ecef;
+}
+
+/* === Alert Message Styling === */
+.alert {
+    border-radius: 0.5rem;
+    padding: 1rem;
+}
+
+/* === Login Page Specific Styling === */
+
+.login-body {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 100vh;
+    background-color: rgb(0 71 49);
+    background-size: cover;
+    background-position: center;
+}
+
+.login-container {
+    background-color: rgb(48, 12, 16);
+    padding: 2.5rem;
+    border-radius: 0.75rem;
+    box-shadow: 0 0.5rem 1rem rgba(0,0,0,0.15)!important;
+    width: 100%;
+    max-width: 420px;
+}
+
+.login-container h2 {
+    color: white; /* <-- TEXT COLOR CHANGED HERE */
+}
+
+.login-logo {
+    display: block;
+    margin-left: auto;
+    margin-right: auto;
+    width: 250px;
+    height: 250px;
+    object-fit: cover;
+}
+
+/* === Dashboard Specific Styling === */
+
+.dashboard-header {
+    background: linear-gradient(135deg, rgb(68, 22, 36), rgb(48, 12, 16));
+    color: white;
+    padding: 2rem;
+    border-radius: 0.75rem;
+    margin-bottom: 2rem;
+    box-shadow: 0 4px 10px rgba(0,0,0,0.1);
+}
+
+.dashboard-header h1 {
+    font-weight: 700;
+}
+
+.card-header-custom {
+    background-color: #343a40;
+    color: white;
+    font-weight: 600;
+    padding: 0.75rem 1.25rem;
+}
+
+/* Base style for all status buttons */
+.status-btn {
+    text-align: left;
+    font-size: 1.1rem;
+    padding: 0.8rem 1.2rem;
+    transition: all 0.2s ease-in-out;
+}
+
+/* Unique styles for each count status */
+.status-not-started {
+    background-color: #6c757d; /* Grey */
+    border: 2px solid #6c757d;
+    color: white;
+}
+.status-not-started:hover {
+    background-color: #5a6268;
+    border-color: #545b62;
+    color: white;
+}
+
+.status-counted {
+    background-color: transparent;
+    border: 2px solid #ffc107; /* Yellow */
+    color: #343a40;
+}
+.status-counted:hover {
+    background-color: #ffc107;
+    color: #343a40;
+}
+
+.status-corrected {
+    background-color: transparent;
+    border: 2px solid #198754; /* Green */
+    color: #343a40;
+}
+.status-corrected:hover {
+    background-color: #198754;
+    color: white;
+}
+
+/* === Announcements Page Specific Styling === */
+
+.announcement-item .meta-text {
+    font-size: 0.8rem;
+    color: #6c757d; /* Muted grey text */
+}
+
+.announcement-item .actions a,
+.announcement-item .actions button {
+    font-size: 0.9rem;
+    padding: 0.2rem 0.5rem;
+}
+
+/* === ADDED FOR v1.5 === */
+
+/* --- Footer Styling --- */
+.app-footer {
+    padding: 1.5rem 0;
+    margin-top: 2rem;
+    color: rgba(255, 255, 255, 0.6);
+    text-align: center;
+    font-size: 0.9rem;
+}
+
+/* === Scheduler Mobile Responsiveness === */
+@media (max-width: 991.98px) {
+  /* Make button group stack vertically */
+  .scheduler-role-buttons {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .scheduler-role-buttons .btn-group {
+    flex-direction: column;
+    width: 100%;
+  }
+
+  .scheduler-role-buttons .btn {
+    margin-bottom: 0.5rem;
+    width: 100%;
+    text-align: center;
+  }
+
+  /* Additional spacing for the individual buttons */
+  .scheduler-role-buttons > a:not(.btn-group a) {
+    margin-bottom: 0.5rem;
+    width: 100%;
+    text-align: center;
+  }
+
+  /* Remove left margin from individual buttons on mobile */
+  .scheduler-role-buttons > a.ms-2,
+  .scheduler-role-buttons > a.ms-3 {
+    margin-left: 0 !important;
+  }
+
+  /* Hide the regular table on mobile */
+  .scheduler-table-container {
+    display: none;
+  }
+
+  /* Show mobile card view */
+  .scheduler-mobile-cards {
+    display: block;
+  }
+
+  /* Style for mobile cards */
+  .staff-card {
+    border: 1px solid #dee2e6;
+    border-radius: 0.5rem;
+    margin-bottom: 1rem;
+    background-color: white;
+    overflow: hidden;
+  }
+
+  .staff-card-header {
+    background-color: #343a40;
+    color: white;
+    padding: 1rem;
+    border-top-left-radius: 0.5rem;
+    border-top-right-radius: 0.5rem;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    cursor: pointer;
+  }
+
+  .staff-card-header h5 {
+    margin: 0;
+    flex-grow: 1;
+  }
+
+  .staff-card-header .toggle-icon {
+    transition: transform 0.3s ease;
+  }
+
+  .staff-card-header.collapsed .toggle-icon {
+    transform: rotate(0deg);
+  }
+
+  .staff-card-header.expanded .toggle-icon {
+    transform: rotate(180deg);
+  }
+
+  .staff-card-body {
+    padding: 1rem;
+    display: block;
+  }
+
+  .staff-card-body.collapsed {
+    display: none;
+  }
+
+  .day-assignment {
+    margin-bottom: 1rem;
+    padding-bottom: 1rem;
+    border-bottom: 1px solid #e9ecef;
+  }
+
+  .day-assignment:last-child {
+    border-bottom: none;
+    margin-bottom: 0;
+    padding-bottom: 0;
+  }
+
+  /* Collapse all button */
+  .collapse-all-container {
+    margin-bottom: 1rem;
+    text-align: right;
+  }
+}
+
+@media (min-width: 992px) {
+  /* Hide mobile cards on desktop */
+  .scheduler-mobile-cards {
+    display: none;
+  }
+
+  /* Show regular table on desktop */
+  .scheduler-table-container {
+    display: block;
+  }
+}

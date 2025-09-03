@@ -1,0 +1,84 @@
+{% extends "base.html" %}
+
+{% block title %}Manage Deliveries{% endblock %}
+
+{% block content %}
+<div class="container mt-4">
+    <div class="card shadow-sm">
+        <div class="card-body p-4 p-md-5">
+            <h2 class="card-title mb-2">Manage Deliveries</h2>
+            <p class="text-muted mb-4">Log incoming stock deliveries and view recent delivery history.</p>
+            
+            {# --- SECTION: Log New Delivery --- #}
+            <div class="p-4 rounded-3 mb-5" style="background-color: #f8f9fa;">
+                <h4 class="mb-3">Log New Delivery</h4>
+                <form action="{{ url_for('deliveries') }}" method="POST">
+                    <div class="row g-3">
+                        <div class="col-md-6">
+                            <label for="product_id" class="form-label">Product</label>
+                            <select id="product_id" name="product_id" class="form-select" required>
+                                <option value="" disabled selected>Select a product...</option>
+                                {% for product in products %}
+                                    <option value="{{ product.id }}">{{ product.name }} ({{ product.unit_of_measure }})</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div class="col-md-6">
+                            <label for="quantity" class="form-label">Quantity Delivered</label>
+                            <input type="number" step="0.01" min="0.01" id="quantity" name="quantity" class="form-control" placeholder="e.g., 10.5" required>
+                        </div>
+                        <div class="col-md-6">
+                            <label for="delivery_date" class="form-label">Delivery Date</label>
+                            {# MODIFIED: Use current_date variable from app.py #}
+                            <input type="date" id="delivery_date" name="delivery_date" class="form-control" value="{{ current_date.isoformat() }}" required>
+                        </div>
+                        <div class="col-md-6">
+                            <label for="comment" class="form-label">Comment (Optional)</label>
+                            <input type="text" id="comment" name="comment" class="form-control" placeholder="e.g., Damaged box, Special order">
+                        </div>
+                    </div>
+                    <div class="d-grid mt-4">
+                        <button type="submit" class="btn btn-primary">Log Delivery</button>
+                    </div>
+                </form>
+            </div>
+
+            <hr class="my-5">
+
+            {# --- SECTION: Recent Delivery History --- #}
+            <h4 class="mb-3">Recent Delivery History</h4>
+            {% if recent_deliveries %}
+                <div class="table-responsive">
+                    <table class="table table-striped table-hover align-middle">
+                        <thead class="table-dark">
+                            <tr>
+                                <th>Delivery Date</th>
+                                <th>Product</th>
+                                <th>Quantity</th>
+                                <th>Logged By</th>
+                                <th>Comment</th>
+                                <th>Logged On</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for delivery in recent_deliveries %}
+                            <tr>
+                                <td>{{ delivery.delivery_date.strftime('%Y-%m-%d') }}</td>
+                                <td>{{ delivery.product.name }} ({{ delivery.product.unit_of_measure }})</td>
+                                <td>{{ delivery.quantity|round(2) }}</td>
+                                <td>{{ delivery.user.full_name }}</td>
+                                <td>{{ delivery.comment if delivery.comment else 'N/A' }}</td>
+                                <td>{{ delivery.timestamp.strftime('%Y-%m-%d %H:%M') }}</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            {% else %}
+                <p class="text-muted text-center">No deliveries have been logged yet.</p>
+            {% endif %}
+
+        </div>
+    </div>
+</div>
+{% endblock %}

@@ -1,0 +1,121 @@
+{% extends "base.html" %}
+
+{% block title %}Submit Shift Availability{% endblock %}
+
+{% block content %}
+<div class="container mt-4">
+    <div class="card shadow-sm">
+        <div class="card-body p-4 p-md-5">
+            <h2 class="card-title mb-2">Submit Shift Availability</h2>
+            <p class="text-muted mb-4">Select the shifts you are available to work for the upcoming week ({{ week_dates[0].strftime('%b %d') }} - {{ week_dates[-1].strftime('%b %d') }}).</p>
+            
+            {# NEW: Submission Window Status Display #}
+            {% if is_submission_window_open %}
+                <div class="alert alert-success" role="alert">
+                    <i class="fas fa-clock me-2"></i>Submission window is **OPEN** until {{ submission_window_end|to_local_time('%A, %b %d at %I:%M %p') }} (your local time).
+                    {% if time_until_window_closes %}<span class="d-block">Time remaining: <span id="countdown-timer">{{ time_until_window_closes }}</span></span>{% endif %}
+                </div>
+            {% else %}
+                <div class="alert alert-warning" role="alert">
+                    <i class="fas fa-lock me-2"></i>Submission window is **CLOSED**. It opens on {{ submission_window_start|to_local_time('%A, %b %d at %I:%M %p') }} (your local time).
+                    {% if time_until_window_opens %}<span class="d-block">Opens in: <span id="countdown-timer">{{ time_until_window_opens }}</span></span>{% endif %}
+                </div>
+            {% endif %}
+            {# END NEW #}
+
+            <form method="POST">
+                <div class="table-responsive-lg">
+                    <div class="table-responsive">
+                        <table class="table table-bordered text-center">
+                            <thead class="table-dark">
+                                <tr>
+                                    <th style="width: 20%;">Shift Type</th>
+                                    {% for day in week_dates %}
+                                        <th>{{ day.strftime('%a') }}<br><small>{{ day.strftime('%b %d') }}</small></th>
+                                    {% endfor %}
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for shift_type in shift_types %} {# This now refers to ['Day', 'Night'] #}
+                                <tr>
+                                    <td class="fw-bold align-middle">{{ shift_type }}</td>
+                                    {% for day in week_dates %}
+                                        {% set checkbox_value = day.isoformat() + '_' + shift_type %}
+                                        <td>
+                                            <div class="form-check d-flex justify-content-center align-items-center h-100">
+                                                <input class="form-check-input" type="checkbox" name="shifts" value="{{ checkbox_value }}"
+                                                    id="{{ checkbox_value }}" style="transform: scale(1.5);"
+                                                    {% if checkbox_value in existing_set %}checked{% endif %}
+                                                    {% if not is_submission_window_open or day < today %}disabled{% endif %}>
+                                            </div>
+                                        </td>
+                                    {% endfor %}
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+                <div class="d-grid mt-4">
+                    <button type="submit" class="btn btn-primary btn-lg" {% if not is_submission_window_open %}disabled{% endif %}>Submit Availability</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+{% block scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const countdownSpan = document.getElementById('countdown-timer');
+    const submissionWindowEndRaw = "{{ submission_window_end | tojson | safe }}"; 
+    const submissionWindowStartRaw = "{{ submission_window_start | tojson | safe }}";
+    const isWindowOpen = {{ is_submission_window_open | tojson | safe }};
+
+    function updateCountdown() {
+        const now = new Date();
+        let targetTime;
+        let messagePrefix;
+
+        if (isWindowOpen) {
+            targetTime = new Date(JSON.parse(submissionWindowEndRaw));
+            messagePrefix = "Time remaining: ";
+        } else {
+            targetTime = new Date(JSON.parse(submissionWindowStartRaw));
+            messagePrefix = "Opens in: ";
+        }
+
+        const diff = targetTime.getTime() - now.getTime();
+
+        if (diff <= 0) {
+            if (countdownSpan) {
+                countdownSpan.textContent = "Window now " + (isWindowOpen ? "closed." : "open.");
+            }
+            location.reload();
+            return;
+        }
+
+        const days = Math.floor(diff / (1000 * 60 * 60 * 24));
+        const hours = Math.floor((diff % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+        const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
+        const seconds = Math.floor((diff % (1000 * 60)) / 1000);
+
+        let countdownText = "";
+        if (days > 0) countdownText += `${days}d `;
+        if (hours > 0 || days > 0) countdownText += `${hours}h `;
+        if (minutes > 0 || hours > 0 || days > 0) countdownText += `${minutes}m `;
+        countdownText += `${seconds}s`;
+
+        if (countdownSpan) {
+            countdownSpan.textContent = countdownText;
+        }
+    }
+
+    if (countdownSpan) {
+        updateCountdown();
+        setInterval(updateCountdown, 1000);
+    }
+});
+</script>
+{% endblock scripts %}
+{% endblock %}

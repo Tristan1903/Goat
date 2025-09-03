@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+
+{% block title %}Edit Booking{% endblock %}
+
+{% block content %}
+<div class="container mt-4">
+    <div class="row justify-content-center">
+        <div class="col-lg-8">
+            <div class="card shadow-sm">
+                <div class="card-body p-4 p-md-5">
+                    <h2 class="card-title mb-2">Edit Booking for: {{ booking.customer_name }}</h2>
+                    <p class="text-muted mb-4">Update the details for this booking.</p>
+                    <form action="{{ url_for('edit_booking', booking_id=booking.id) }}" method="POST">
+                        <div class="row g-3">
+                            <div class="col-md-6">
+                                <label for="customer_name" class="form-label">Customer Name</label>
+                                <input type="text" id="customer_name" name="customer_name" class="form-control" value="{{ booking.customer_name }}" required>
+                            </div>
+                            <div class="col-md-6">
+                                <label for="contact_info" class="form-label">Contact Info (Phone/Email)</label>
+                                <input type="text" id="contact_info" name="contact_info" class="form-control" value="{{ booking.contact_info }}">
+                            </div>
+                            <div class="col-md-4">
+                                <label for="party_size" class="form-label">Party Size</label>
+                                <input type="number" id="party_size" name="party_size" class="form-control" min="1" value="{{ booking.party_size }}" required>
+                            </div>
+                            <div class="col-md-4">
+                                <label for="booking_date" class="form-label">Booking Date</label>
+                                <input type="date" id="booking_date" name="booking_date" class="form-control" value="{{ booking.booking_date.isoformat() }}" required>
+                            </div>
+                            <div class="col-md-4">
+                                <label for="booking_time" class="form-label">Booking Time</label>
+                                <input type="time" id="booking_time" name="booking_time" class="form-control" value="{{ booking.booking_time }}" required>
+                            </div>
+                            <div class="col-12">
+                                <label for="notes" class="form-label">Notes (Optional)</label>
+                                <textarea id="notes" name="notes" class="form-control" rows="3">{{ booking.notes }}</textarea>
+                            </div>
+                            <div class="col-12">
+                                <label for="status" class="form-label">Status</label>
+                                <select id="status" name="status" class="form-select">
+                                    <option value="Confirmed" {% if booking.status == 'Confirmed' %}selected{% endif %}>Confirmed</option>
+                                    <option value="Cancelled" {% if booking.status == 'Cancelled' %}selected{% endif %}>Cancelled</option>
+                                    <option value="Completed" {% if booking.status == 'Completed' %}selected{% endif %}>Completed</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="d-grid gap-2 d-md-flex justify-content-md-end mt-4">
+                            <a href="{{ url_for('bookings') }}" class="btn btn-secondary me-md-2">Cancel</a>
+                            <button type="submit" class="btn btn-primary">Update Booking</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

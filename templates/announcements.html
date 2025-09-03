@@ -1,0 +1,127 @@
+{% extends "base.html" %}
+
+{% block title %}Announcements{% endblock %}
+
+{% block content %}
+<div class="container mt-4">
+    <div class="card shadow-sm">
+        <div class="card-body p-4 p-md-5">
+
+            <h2 class="card-title mb-2">Announcements</h2>
+            <p class="text-muted mb-4">View and post important messages for your team here.</p>
+
+
+            <div class="p-4 rounded-3 mb-5" style="background-color: #f8f9fa;">
+                <h4 class="mb-3">Post a New Announcement</h4>
+                <form action="{{ url_for('announcements') }}" method="POST">
+                    <div class="mb-3">
+                        <label for="title" class="form-label">Title</label>
+                        <input type="text" id="title" name="title" class="form-control" required value="{{ request.form.get('title', '') }}">
+                    </div>
+                    <div class="mb-3">
+                        <label for="category" class="form-label">Category</label>
+                        <select name="category" id="category" class="form-select">
+                            <option value="General" {% if request.form.get('category') == 'General' %}selected{% endif %}>General</option>
+                            <option value="Late Arrival" {% if request.form.get('category') == 'Late Arrival' %}selected{% endif %}>Late Arrival</option>
+                            <option value="Urgent" {% if request.form.get('category') == 'Urgent' %}selected{% endif %}>Urgent</option>
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label for="target_roles" class="form-label">Target Specific Roles (Optional)</label>
+                        <select name="target_roles[]" id="target_roles" class="form-select" multiple size="5" aria-describedby="targetRolesHelp">
+                            <option value="">(Broadcast to All Eligible Roles)</option>
+                            {% for role in all_roles %}
+                                {% if role.name != 'system_admin' or current_user.has_role('system_admin') %}
+                                    <option value="{{ role.id }}"
+                                        {% if role.id|string in request.form.getlist('target_roles[]') %}selected{% endif %}>
+                                        {{ role.name.replace('_', ' ').title() }}
+                                    </option>
+                                {% endif %}
+                            {% endfor %}
+                        </select>
+                        <div id="targetRolesHelp" class="form-text">Hold Ctrl/Cmd to select multiple roles. If no roles are selected, it will be visible to all users with access to Announcements.</div>
+                    </div>
+                    {# NEW: Actionable Schedule Link Dropdown #}
+                    <div class="mb-3">
+                        <label for="action_link_view" class="form-label">Make Actionable (Link to Schedule)</label>
+                        <select name="action_link_view" id="action_link_view" class="form-select">
+                            <option value="none" selected>(No Direct Link)</option>
+                            {% for view in actionable_schedule_views %}
+                                <option value="{{ view.value }}" {% if request.form.get('action_link_view') == view.value %}selected{% endif %}>
+                                    {{ view.label }}
+                                </option>
+                            {% endfor %}
+                        </select>
+                        <div class="form-text">Selecting a schedule will add a button to the announcement that redirects to that schedule page.</div>
+                    </div>
+                    <div class="mb-3">
+                        <label for="message" class="form-label">Message</label>
+                        <textarea id="message" name="message" rows="4" class="form-control" required>{{ request.form.get('message', '') }}</textarea>
+                    </div>
+                    <div class="d-grid">
+                        <button type="submit" class="btn btn-primary">Post Announcement</button>
+                    </div>
+                </form>
+            </div>
+            <hr class="my-4">
+
+            <!-- List of Existing Announcements -->
+             <div>
+                <h4 class="mb-3">Recent Announcements</h4>
+                {% if current_user.has_role('system_admin') or current_user.has_role('general_manager') or current_user.has_role('manager') %}
+                    <form action="{{ url_for('clear_all_announcements') }}" method="post" class="mb-0">
+                        <button type="submit" class="btn btn-sm btn-outline-danger" onclick="return confirm('Are you sure you want to clear ALL announcements? This action cannot be undone.')">
+                            <i class="fas fa-eraser me-1"></i>Clear All Announcements
+                        </button>
+                    </form>
+                    {% endif %}
+            </div>
+            {% if announcements %}
+            <div class="list-group">
+                {% for announcement in announcements %}
+                <div class="list-group-item list-group-item-action flex-column align-items-start announcement-item">
+                    <div class="d-flex w-100 justify-content-between">
+                        <h5 class="mb-1">{{ announcement.title }}</h5>
+                         <span class="badge
+                            {% if announcement.category == 'Urgent' %}bg-danger
+                            {% elif announcement.category == 'Late Arrival' %}bg-warning text-dark
+                            {% else %}bg-info text-dark{% endif %}">{{ announcement.category }}</span>
+                        <div class="actions d-flex align-items-center">
+                            {# Display target roles for the announcement #}
+                            {% if announcement.target_roles %}
+                                <small class="text-muted me-2">Targeted:
+                                    {% for role in announcement.target_roles %}
+                                        {{ role.name.replace('_', ' ').title() }}{% if not loop.last %}, {% endif %}
+                                    {% endfor %}
+                                </small>
+                            {% else %}
+                                <small class="text-muted me-2">Targeted: All Eligible</small>
+                            {% endif %}
+                            {# NEW: Action link button #}
+                            {% if announcement.action_link %}
+                                <a href="{{ announcement.action_link }}" class="btn btn-sm btn-outline-primary ms-2">
+                                    <i class="fas fa-calendar-alt me-1"></i>View Schedule
+                                </a>
+                            {% endif %}
+
+                            {# Delete button #}
+                            {% if current_user.id == announcement.user_id or current_user.has_role('system_admin') or current_user.has_role('general_manager') %}
+                            <form action="{{ url_for('delete_announcement', announcement_id=announcement.id) }}" method="post" class="mb-0 ms-2">
+                                <button type="submit" class="btn btn-sm btn-outline-danger" onclick="return confirm('Are you sure you want to delete this announcement?')">Delete</button>
+                            </form>
+                            {% endif %}
+                        </div>
+                    </div>
+                    <p class="mb-1">{{ announcement.message }}</p>
+                    <small class="meta-text">Posted by {{ announcement.user.full_name }} ({{ announcement.user.username }}) on {{ announcement.timestamp.strftime('%Y-%m-%d %H:%M') }}</small>
+                </div>
+                {% endfor %}
+            </div>
+            {% else %}
+            <p class="text-muted text-center">No announcements have been posted yet.</p>
+            {% endif %}
+
+        </div>
+    </div>
+</div>
+{% endblock %}

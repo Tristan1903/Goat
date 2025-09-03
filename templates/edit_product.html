@@ -1,0 +1,58 @@
+<!-- START OF FILE edit_product.html -->
+
+{% extends "base.html" %}
+
+{% block title %}Edit Product{% endblock %}
+
+{% block content %}
+<div class="container mt-4">
+    <div class="row justify-content-center">
+        <div class="col-lg-8">
+            <!-- Main content card for the form -->
+            <div class="card shadow-sm">
+                <div class="card-body p-4 p-md-5">
+
+                    <h2 class="card-title mb-2">Edit Product</h2>
+                    <p class="text-muted mb-4">Update the details for <strong>{{ product.name }}</strong>.</p>
+
+                    <form action="{{ url_for('edit_product', product_id=product.id) }}" method="post">
+                        <div class="mb-3">
+                            <label for="name" class="form-label">Product Name</label>
+                            <input type="text" id="name" name="name" value="{{ product.name }}" class="form-control" required>
+                        </div>
+                        
+                        <div class="mb-3">
+                            <label for="type" class="form-label">Product Type</label>
+                            <input type="text" id="type" name="type" value="{{ product.type }}" class="form-control" required>
+                        </div>
+                        
+                        <div class="mb-3">
+                            <label for="unit_of_measure" class="form-label">Unit of Measure</label>
+                            <input type="text" id="unit_of_measure" name="unit_of_measure" value="{{ product.unit_of_measure }}" class="form-control" required>
+                        </div>
+
+                        {# NEW: Add Product Number input field #}
+                        <div class="mb-3">
+                            <label for="product_number" class="form-label">Product # (Optional)</label>
+                            <input type="text" id="product_number" name="product_number" class="form-control" value="{{ product.product_number if product.product_number is not none else '' }}" placeholder="e.g., SKU-12345">
+                        </div>
+
+                        <div class="mb-3">
+                            <label for="unit_price" class="form-label">Unit Price (Optional)</label>
+                            <div class="input-group">
+                                <span class="input-group-text">R</span>
+                                <input type="number" id="unit_price" name="unit_price" class="form-control" min="0" step="0.01" value="{{ product.unit_price if product.unit_price is not none else '' }}" placeholder="e.g., 25.50">
+                            </div>
+                        </div>
+                        
+                        <div class="d-grid gap-2 d-md-flex justify-content-md-end mt-4">
+                            <a href="{{ url_for('products') }}" class="btn btn-secondary me-md-2">Cancel</a>
+                            <button type="submit" class="btn btn-primary">Update Product</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

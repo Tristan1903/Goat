@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Inventory Management{% endblock %}</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link href="{{ url_for('static', filename='styles.css') }}" rel="stylesheet">
+    <link rel="icon" href="{{ url_for('static', filename='logo.ico') }}" type="image/x-icon">
+</head>
+<body class="d-flex flex-column min-vh-100">
+    <nav class="navbar navbar-expand-lg navbar-dark custom-navbar">
+        <div class="container-fluid">
+            <a class="navbar-brand" href="{{ url_for('dashboard') }}">
+                <img src="{{ url_for('static', filename='logo.avif') }}" alt="Inventory Logo" width="60" height="60">
+            </a>
+            <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav" aria-controls="navbarNav" aria-expanded="false" aria-label="Toggle navigation">
+                <span class="navbar-toggler-icon"></span>
+            </button>
+            <div class="collapse navbar-collapse" id="navbarNav">
+                <ul class="navbar-nav me-auto">
+                    {% if current_user.is_authenticated %}
+
+                        <!-- ===== UNIVERSAL LINKS ===== -->
+                        <li class="nav-item"><a class="nav-link" href="{{ url_for('dashboard') }}">Dashboard</a></li>
+
+                        <!-- Announcements -->
+                        {% if not current_user.has_role('scheduler') or current_user.has_role('system_admin') or current_user.has_role('general_manager') or current_user.has_role('owners') %}
+                        <li class="nav-item"><a class="nav-link" href="{{ url_for('announcements') }}">Announcements</a></li>
+                        {% endif %}
+
+                        <!-- Leave -->
+                        {% if not current_user.has_role('scheduler') or current_user.has_role('system_admin') or current_user.has_role('general_manager') or current_user.has_role('owners') %}
+                        <li class="nav-item"><a class="nav-link" href="{{ url_for('leave_requests') }}">Leave</a></li>
+                        {% endif %}
+
+                        <!-- ===== STAFF-SPECIFIC LINKS ===== -->
+                        {% if current_user.has_role('bartender') or current_user.has_role('waiter') or current_user.has_role('skullers') or current_user.has_role('manager') or current_user.has_role('general_manager') or current_user.has_role('system_admin') %}
+                            <li class="nav-item"><a class="nav-link" href="{{ url_for('submit_shifts') }}">Submit Availability</a></li>
+                        {% endif %}
+
+                        <!-- My Schedule (Now a Dropdown for Schedulers/Managers/Staff) -->
+                        {% if current_user.has_role('bartender') or current_user.has_role('waiter') or current_user.has_role('skullers') or current_user.has_role('manager') or current_user.has_role('general_manager') or current_user.has_role('scheduler') or current_user.has_role('system_admin') %}
+                            <li class="nav-item dropdown">
+                                <a class="nav-link dropdown-toggle" href="#" id="scheduleViewDropdown" role="button" data-bs-toggle="dropdown" aria-expanded="false">Schedules</a>
+                                <ul class="dropdown-menu" aria-labelledby="scheduleViewDropdown">
+                                    <li><a class="dropdown-item" href="{{ url_for('my_schedule', view='personal') }}">View My Shifts</a></li>
+
+                                    <!-- Consolidated Staff Schedules -->
+                                    <li><hr class="dropdown-divider"></li>
+                                    <li><h6 class="dropdown-header">Consolidated Staff Schedules</h6></li>
+
+                                    {# MODIFIED: Use BOH and FOH endpoints directly for staff #}
+                                    {% if current_user.has_role('bartender') or current_user.has_role('skullers') or current_user.has_role('manager') or current_user.has_role('general_manager') or current_user.has_role('scheduler') or current_user.has_role('system_admin') %}
+                                        <li><a class="dropdown-item" href="{{ url_for('my_schedule', view='boh') }}">Back of House (BOH) Schedule</a></li>
+                                    {% endif %}
+                                    {% if current_user.has_role('waiter') or current_user.has_role('manager') or current_user.has_role('general_manager') or current_user.has_role('scheduler') or current_user.has_role('system_admin') %}
+                                        <li><a class="dropdown-item" href="{{ url_for('my_schedule', view='foh') }}">Front of House (FOH) Schedule</a></li>
+                                    {% endif %}
+
+                                    <!-- Managers Schedule -->
+                                    {% if current_user.has_role('manager') or current_user.has_role('general_manager') or current_user.has_role('scheduler') or current_user.has_role('system_admin') %}
+                                        <li><a class="dropdown-item" href="{{ url_for('my_schedule', view='managers') }}">Managers Schedule</a></li>
+
+                                        <!-- Individual Role Schedules (mostly for managers/admins who need granular view) -->
+                                        <li><hr class="dropdown-divider"></li>
+                                        <li><h6 class="dropdown-header">Individual Role Schedules</h6></li>
+                                        <li><a class="dropdown-item" href="{{ url_for('my_schedule', view='bartenders') }}">Bartenders Only</a></li>
+                                        <li><a class="dropdown-item" href="{{ url_for('my_schedule', view='waiters') }}">Waiters Only</a></li>
+                                        <li><a class="dropdown-item" href="{{ url_for('my_schedule', view='skullers') }}">Skullers Only</a></li>
+                                    {% endif %}
+                                </ul>
+                            </li>
+                        {% endif %}
+
+                        <!-- ===== INVENTORY & RECIPES (Hidden from Waiter/Scheduler/Skullers - Business Owner sees Reports) ===== -->
+                        {% if current_user.has_role('bartender') or current_user.has_role('manager') or current_user.has_role('general_manager') or current_user.has_role('system_admin') or current_user.has_role('owners') %}
+                        <li class="nav-item dropdown">
+                            <a class="nav-link dropdown-toggle" href="#" id="inventoryDropdown" role="button" data-bs-toggle="dropdown" aria-expanded="false">Inventory & Recipes</a>
+                            <ul class="dropdown-menu" aria-labelledby="inventoryDropdown">
+                                {% if current_user.has_role('system_admin') or current_user.has_role('manager') or current_user.has_role('bartender') %}
+                                    <li><a class="dropdown-item" href="{{ url_for('recipes') }}">Recipe Book</a></li>
+                                {% endif %}
+                                {% if current_user.has_role('bartender') or current_user.has_role('manager') or current_user.has_role('general_manager') or current_user.has_role('system_admin') %}
+                                    <li><hr class="dropdown-divider"></li>
+                                    <li><h6 class="dropdown-header">Counts</h6></li>
+                                    {% for location in all_locations %}
+                                        <li><a class="dropdown-item" href="{{ url_for('submit_count', location_slug=location.name|replace(' ', '_')|lower) }}">{{ location.name }}</a></li>
+                                    {% else %}
+                                        <li><a class="dropdown-item disabled" href="#">No locations defined</a></li>
+                                    {% endfor %}
+                                {% endif %}
+                                {% if current_user.has_role('manager') or current_user.has_role('general_manager') or current_user.has_role('system_admin') or current_user.has_role('owners') %}
+                                    <li><hr class="dropdown-divider"></li>
+                                    <li><h6 class="dropdown-header">Reports & Products</h6></li>
+                                    <li><a class="dropdown-item" href="{{ url_for('variance') }}">View Variance</a></li>
+                                    <li><a class="dropdown-item" href="{{ url_for('variance_explanations') }}">Variance Explanations</a></li>
+                                    <li><a class="dropdown-item" href="{{ url_for('daily_summary') }}">Daily Summary Report</a></li>
+                                    <li><a class="dropdown-item" href="{{ url_for('reports') }}">Inventory Log</a></li>
+                                    <li><a class="dropdown-item" href="{{ url_for('historical_report') }}">Historical Reports</a></li>
+                                {% endif %}
+                            </ul>
+                        </li>
+                        {% endif %}
+
+                        <!-- ===== MANAGEMENT DROPDOWN ===== -->
+                        {% set management_roles = ['manager', 'general_manager', 'scheduler', 'system_admin', 'owners'] %}
+                        {% if management_roles | select('in', current_user.role_names) | list | length > 0 %}
+                        <li class="nav-item dropdown">
+                            <a class="nav-link dropdown-toggle" href="#" id="managementDropdown" role="button" data-bs-toggle="dropdown" aria-expanded="false">Management</a>
+                            <ul class="dropdown-menu" aria-labelledby="managementDropdown">
+                                {% if current_user.has_role('scheduler') or current_user.has_role('manager') or current_user.has_role('general_manager') or current_user.has_role('system_admin') %}
+                                    <li><a class="dropdown-item" href="{{ url_for('scheduler') }}">Scheduler</a></li>
+                                {% endif %}
+                                {% if current_user.has_role('manager') or current_user.has_role('general_manager') or current_user.has_role('system_admin') %}
+                                    <li><a class="dropdown-item" href="{{ url_for('manage_swaps') }}">Manage Swaps</a></li>
+                                    <li><a class="dropdown-item" href="{{ url_for('manage_volunteered_shifts') }}">Manage Volunteered Shifts</a></li>
+                                    <li><hr class="dropdown-divider"></li>
+                                    <li><a class="dropdown-item" href="{{ url_for('manage_users') }}">Manage Users</a></li>
+                                {% endif %}
+                                {% if current_user.has_role('manager') or current_user.has_role('general_manager') or current_user.has_role('system_admin') %}
+                                    <li><a class="dropdown-item" href="{{ url_for('active_users') }}">Active Users</a></li>
+                                    <li><hr class="dropdown-divider"></li>
+                                    <li><a class="dropdown-item" href="{{ url_for('beginning_of_day') }}">Submit Sales</a></li>
+                                {% endif %}
+                                {% if current_user.has_role('general_manager') or current_user.has_role('system_admin') %}
+                                    <li><a class="dropdown-item" href="{{ url_for('manage_locations') }}">Manage Locations</a></li>
+                                {% endif %}
+                                {% if current_user.has_role('manager') or current_user.has_role('general_manager') or current_user.has_role('system_admin') or current_user.has_role('owners') %}
+                                <li><a class="dropdown-item" href="{{ url_for('deliveries') }}">Manage Deliveries</a></li>
+                                <li><a class="dropdown-item" href="{{ url_for('products') }}">Manage Products</a></li>
+                                {% endif %}
+                            </ul>
+                        </li>
+                        {% endif %}
+                    {% endif %}
+                </ul>
+                <ul class="navbar-nav ms-auto align-items-center">
+                    {% if current_user.is_authenticated %}
+                        <li class="nav-item dropdown">
+                            <a class="nav-link" href="#" role="button" id="notificationBell" data-bs-toggle="dropdown" aria-expanded="false">
+                                <i class="fas fa-bell fs-5"></i>
+                                {% if unread_announcements_count > 0 %}
+                                <span class="position-absolute top-10 start-80 translate-middle p-2 bg-danger border border-light rounded-circle">
+                                    <span class="visually-hidden">New alerts</span>
+                                </span>
+                                {% endif %}
+                            </a>
+                            <ul class="dropdown-menu dropdown-menu-end" aria-labelledby="notificationBell" style="width: 350px;">
+                                <li class="p-2 border-bottom"><h6 class="dropdown-header">Recent Announcements</h6></li>
+                                {% for announcement in recent_announcements %}
+                                    <li><a class="dropdown-item text-wrap" href="{{ url_for('announcements') }}"><div class="fw-bold">{{ announcement.title }}</div><div class="small text-muted">{{ announcement.message|truncate(80) }}</div></a></li>
+                                {% else %}
+                                    <li class="p-2 text-center text-muted small">No recent announcements.</li>
+                                {% endfor %}
+                                <li class="p-2 border-top text-center"><a href="{{ url_for('announcements') }}">View all announcements</a></li>
+
+                            </ul>
+                        </li>
+                        <li class="nav-item dropdown">
+                            <a class="nav-link dropdown-toggle active" href="#" role="button" data-bs-toggle="dropdown" aria-expanded="false">
+                                <i class="fas fa-user-circle me-1 fs-5"></i> {{ current_user.full_name }}
+                            </a>
+                            <ul class="dropdown-menu dropdown-menu-end">
+                                <li><h6 class="dropdown-header">
+                                    Role(s):
+                                    {% for role in current_user.roles %}
+                                        {{ role.name.replace('_', ' ').title() }}{% if not loop.last %}, {% endif %}
+                                    {% endfor %}
+                                </h6></li>
+                                <li><a class="dropdown-item" href="{{ url_for('user_manual') }}"><i class="fas fa-book me-2"></i>User Manual</a></li>
+                                <li><a class="dropdown-item" href="{{ url_for('change_password') }}"><i class="fas fa-key me-2"></i>Change Password</a></li>
+                                <li><hr class="dropdown-divider"></li>
+                                <li><a class="dropdown-item text-danger" href="{{ url_for('logout') }}"><i class="fas fa-sign-out-alt me-2"></i>Logout</a></li>
+                            </ul>
+                        </li>
+                    {% endif %}
+                </ul>
+            </div>
+        </div>
+    </nav>
+
+    <div class="wrapper flex-grow-1">
+        <main class="container mt-4">
+            {% with messages = get_flashed_messages(with_categories=true) %}
+                {% if messages %}
+                    {% for category, message in messages %}
+                        <div class="alert alert-{{ category }} alert-dismissible fade show" role="alert">
+                            {{ message }}
+                            <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+                        </div>
+                    {% endfor %}
+                {% endif %}
+            {% endwith %}
+            {% block content %}{% endblock %}
+        </main>
+    </div>
+
+    <footer class="app-footer">
+        <div class="container">
+            <p class="mb-0">developed and designed by</p><img src="{{ url_for('static', filename='Valkyrie_Logo.svg') }}" alt="code by Valkyrie Thread" height="50">
+        </div>
+    </footer>
+
+    {% if current_user.is_authenticated %}
+    <div class="toast-container position-fixed bottom-0 end-0 p-3"></div>
+    {% endif %}
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+
+    {# Main application JavaScript block #}
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            var tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'));
+            var tooltipList = tooltipTriggerList.map(function (tooltipTriggerEl) {
+                return new bootstrap.Tooltip(tooltipTriggerEl);
+            });
+
+            const searchInput = document.getElementById('product-search');
+            const typeFilter = document.getElementById('type-filter');
+            if (searchInput || typeFilter) {
+                const productRows = document.querySelectorAll('table tbody tr');
+                function filterProducts() {
+                    const searchTerm = searchInput.value.toLowerCase();
+                    const selectedType = typeFilter.value;
+                    productRows.forEach(row => {
+                        const productName = row.querySelector('.product-name').textContent.toLowerCase();
+                        const productType = row.querySelector('.product-type').textContent;
+                        const nameMatch = productName.includes(searchTerm);
+                        const typeMatch = (selectedType === 'all' || productType === selectedType);
+                        row.style.display = (nameMatch && typeMatch) ? '' : 'none';
+                    });
+                }
+                if (searchInput) searchInput.addEventListener('keyup', filterProducts);
+                if (typeFilter) typeFilter.addEventListener('change', filterProducts);
+            }
+
+            document.querySelectorAll('.password-toggle-btn').forEach(button => {
+                button.addEventListener('click', function () {
+                    const passwordInput = this.closest('.input-group').querySelector('input');
+                    const eyeIcon = this.querySelector('i');
+                    if (passwordInput) {
+                        const type = passwordInput.getAttribute('type') === 'password' ? 'text' : 'password';
+                        passwordInput.setAttribute('type', type);
+                        eyeIcon.classList.toggle('fa-eye-slash');
+                    }
+                });
+            });
+
+            const notificationBell = document.getElementById('notificationBell');
+            if (notificationBell) {
+                notificationBell.addEventListener('click', function() {
+                    const redDot = this.querySelector('.bg-danger');
+                    if (redDot) redDot.remove();
+                    fetch('/api/mark-announcements-read', { method: 'POST' });
+                });
+            }
+
+            const announcementCard = document.getElementById('latest-announcement-card');
+            const dismissButton = document.getElementById('dismiss-announcement-btn');
+            if (announcementCard && sessionStorage.getItem('announcementDismissed') === 'true') {
+                announcementCard.style.display = 'none';
+            }
+            if (dismissButton) {
+                dismissButton.addEventListener('click', function() {
+                    if (announcementCard) announcementCard.style.display = 'none';
+                    sessionStorage.setItem('announcementDismissed', 'true');
+                });
+            }
+        });
+    </script>
+
+    {% if current_user.is_authenticated %}
+    <script>
+        let lastSeenAnnouncementId = null;
+        const currentUserID = parseInt('{{ current_user.id }}', 10);
+        function createToast(title, message, author) {
+            const toastContainer = document.querySelector('.toast-container');
+            const toastHTML = `<div class="toast" role="alert" aria-live="assertive" aria-atomic="true"><div class="toast-header"><strong class="me-auto"><i class="fas fa-bullhorn me-2"></i>New Announcement</strong><small>just now</small><button type="button" class="btn-close" data-bs-dismiss="toast" aria-label="Close"></button></div><div class="toast-body"><strong>${title}</strong><br>${message}<div class="text-muted small mt-2">- ${author}</div></div></div>`;
+            toastContainer.insertAdjacentHTML('beforeend', toastHTML);
+            const newToastEl = toastContainer.lastElementChild;
+            const newToast = new bootstrap.Toast(newToastEl);
+            newToast.show();
+            newToastEl.addEventListener('hidden.bs.toast', () => newToastEl.remove());
+        }
+        async function checkForNewAnnouncements() {
+            try {
+                const response = await fetch('/api/latest-announcement');
+                const latest = await response.json();
+                if (lastSeenAnnouncementId === null) {
+                    lastSeenAnnouncementId = latest ? latest.id : 0;
+                    return;
+                }
+                if (latest && latest.id > lastSeenAnnouncementId && latest.user_id !== currentUserID) {
+                    lastSeenAnnouncementId = latest.id;
+                    createToast(latest.title, latest.message, latest.user_name);
+                }
+            } catch (error) {
+                console.error("Error checking for announcements:", error);
+            }
+        }
+        checkForNewAnnouncements();
+        setInterval(checkForNewAnnouncements, 10000);
+    </script>
+    {% endif %}
+    {% block scripts %}{% endblock %}
+</body>
+</html>

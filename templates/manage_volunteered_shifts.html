@@ -1,0 +1,123 @@
+{% extends "base.html" %}
+
+{% block title %}Manage Volunteered Shifts{% endblock %}
+
+{% block content %}
+<div class="container mt-4">
+    <div class="card shadow-sm">
+        <div class="card-body p-4 p-md-5">
+            <h2 class="card-title mb-2">Manage Volunteered Shifts</h2>
+            <p class="text-muted mb-4">Review shifts put up for volunteering and assign a cover.</p>
+            
+            {# --- SECTION FOR ACTIONABLE VOLUNTEERED SHIFTS --- #}
+            <h4 class="mb-3">Open Shifts & Volunteers</h4>
+            {% if actionable_volunteered_shifts %}
+                {% for item in actionable_volunteered_shifts %} {# Iterate over processed items #}
+                {% set v_shift = item.v_shift %}
+                {% set eligible_volunteers = item.eligible_volunteers %} {# Get the pre-filtered list #}
+                <div class="card mb-3 border-info">
+                    <div class="card-body">
+                        <div class="row align-items-center">
+                            <div class="col-md-5">
+                                <p class="mb-1"><strong>Shift:</strong> {{ v_shift.schedule.assigned_shift }} on {{ v_shift.schedule.shift_date.strftime('%A, %b %d') }}</p>
+                                <p class="mb-1"><strong>Relinquished by:</strong> {{ v_shift.requester.full_name }}</p>
+                                {% if v_shift.relinquish_reason %}<small class="d-block text-muted">Reason: {{ v_shift.relinquish_reason }}</small>{% endif %}
+                            </div>
+                            <div class="col-md-7">
+                                {% if eligible_volunteers %} {# Check if there are eligible volunteers #}
+                                    <p class="mb-1"><strong>Volunteers:</strong></p>
+                                    <form action="{{ url_for('approve_volunteer') }}" method="POST">
+                                        <input type="hidden" name="volunteered_shift_id" value="{{ v_shift.id }}">
+                                        <div class="input-group">
+                                            <select class="form-select" name="approved_volunteer_id" required>
+                                                <option value="" disabled selected>Select a volunteer to assign...</option>
+                                                {# MODIFIED LOGIC: Iterate directly over the pre-filtered eligible_volunteers #}
+                                                {% for volunteer_user in eligible_volunteers %}
+                                                    <option value="{{ volunteer_user.id }}">{{ volunteer_user.full_name }}</option>
+                                                {% endfor %}
+                                            </select>
+                                            <button type="submit" class="btn btn-success" name="action" value="Approve">Approve</button>
+                                            <button type="submit" class="btn btn-danger" name="action" value="Cancel">Cancel Cycle</button>
+                                        </div>
+                                    </form>
+                                {% else %}
+                                    <div class="alert alert-warning small py-2 my-2" role="alert">
+                                        No eligible volunteers for this shift yet, or none with matching roles/availability.
+                                    </div>
+                                    <form action="{{ url_for('approve_volunteer') }}" method="POST" class="d-inline">
+                                        <input type="hidden" name="volunteered_shift_id" value="{{ v_shift.id }}">
+                                        <button type="submit" class="btn btn-sm btn-danger" name="action" value="Cancel">Cancel Cycle</button>
+                                    </form>
+                                {% endif %}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                {% endfor %}
+            {% else %}
+                <div class="alert alert-success text-center" role="alert">
+                    <i class="fas fa-check-circle me-2"></i>No shifts are currently open for volunteering or awaiting approval.
+                </div>
+            {% endif %}
+
+            <hr class="my-5">
+
+            {# --- SECTION FOR VOLUNTEERED SHIFTS HISTORY --- #}
+            <h4 class="mb-3">Volunteered Shifts History</h4>
+            {% if all_volunteered_shifts_history %}
+                <div class="table-responsive">
+                    <table class="table table-striped table-hover align-middle">
+                        <thead class="table-dark">
+                            <tr>
+                                <th>Shift Date</th>
+                                <th>Shift Type</th>
+                                <th>Original Requester</th>
+                                <th>Status</th>
+                                <th>Approved Volunteer</th>
+                                <th>Volunteers Offered</th>
+                                <th>Relinquished On</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for v_shift in all_volunteered_shifts_history %}
+                            <tr>
+                                <td>{{ v_shift.schedule.shift_date.strftime('%Y-%m-%d') }}</td>
+                                <td>{{ v_shift.schedule.assigned_shift }}</td>
+                                <td>{{ v_shift.requester.full_name }}</td>
+                                <td>
+                                    {% if v_shift.status == 'Approved' %}
+                                        <span class="badge bg-success">{{ v_shift.status }}</span>
+                                    {% elif v_shift.status == 'Open' %}
+                                        <span class="badge bg-info text-dark">{{ v_shift.status }}</span>
+                                    {% elif v_shift.status == 'PendingApproval' %}
+                                        <span class="badge bg-warning text-dark">{{ v_shift.status }}</span>
+                                    {% elif v_shift.status == 'Cancelled' %}
+                                        <span class="badge bg-danger">{{ v_shift.status }}</span>
+                                    {% else %}
+                                        <span class="badge bg-secondary">{{ v_shift.status }}</span>
+                                    {% endif %}
+                                </td>
+                                <td>{{ v_shift.approved_volunteer.full_name if v_shift.approved_volunteer else 'N/A' }}</td>
+                                <td>
+                                    {% if v_shift.volunteers %}
+                                        {% for volunteer in v_shift.volunteers %}
+                                            <span class="badge bg-secondary">{{ volunteer.full_name }}</span>{% if not loop.last %},{% endif %}
+                                        {% endfor %}
+                                    {% else %}
+                                        N/A
+                                    {% endif %}
+                                </td>
+                                <td>{{ v_shift.timestamp.strftime('%Y-%m-%d %H:%M') }}</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            {% else %}
+                <p class="text-muted text-center">No shifts have been relinquished yet.</p>
+            {% endif %}
+
+        </div>
+    </div>
+</div>
+{% endblock %}

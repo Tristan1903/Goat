@@ -1,0 +1,328 @@
+{% extends "base.html" %}
+
+{% block title %}Manage Users{% endblock %}
+
+{% block content %}
+<div class="container mt-4">
+    <div class="card shadow-sm">
+        <div class="card-body p-4 p-md-5">
+            <div class="d-flex justify-content-between align-items-center mb-2">
+                <h2 class="card-title mb-0">Manage Users</h2>
+                {% if current_user.has_role('system_admin') or current_user.has_role('manager') %}
+                <a href="{{ url_for('add_user') }}" class="btn btn-primary">
+                    <i class="fas fa-user-plus me-2"></i>Add New User
+                </a>
+                {% endif %}
+            </div>
+            <p class="text-muted mb-4">View, edit, and manage user accounts.</p>
+
+            {# NEW: Filter by Role dropdown #}
+            <div class="row mb-3 align-items-center">
+                <div class="col-md-4">
+                    <label for="roleFilter" class="form-label visually-hidden">Filter by Role</label>
+                    <select class="form-select" id="roleFilter">
+                        <option value="">All Roles</option>
+                        {% for role in all_roles %} {# all_roles needs to be passed from backend #}
+                        <option value="{{ role.name }}">{{ role.name.replace('_', ' ').title() }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="col-md-8 text-end">
+                    {# Add any other filters or search bars here if needed in the future #}
+                </div>
+            </div>
+
+            <div class="table-responsive">
+                <table class="table table-hover" id="userTable">
+                    <thead class="table-dark">
+                        <tr>
+                            <th>Full Name</th>
+                            <th>Username</th>
+                            <th class="sortable" data-sort-by="role">Role <i class="fas fa-sort float-end"></i></th> {# Made sortable #}
+                            <th>Status</th> {# NEW HEADER #}
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for user in users %}
+                        <tr data-roles="{{ user.roles | map(attribute='name') | join(',') }}"> {# Add data-roles attribute for filtering #}
+                            <td class="fw-bold">{{ user.full_name }}</td>
+                            <td>{{ user.username }}</td>
+                            <td data-sort-value="{{ user.roles | map(attribute='name') | join(',') }}"> {# Add data-sort-value for consistent sorting #}
+                                {% for role in user.roles %}
+                                    <span class="badge bg-secondary">{{ role.name.replace('_', ' ').title() }}</span>
+                                {% endfor %}
+                            </td>
+                            {# NEW: Status display #}
+                            <td>
+                                {% if user.is_suspended %}
+                                    <span class="badge bg-danger">Suspended</span>
+                                    {% if user.suspension_end_date %}<small class="d-block text-muted">Until {{ user.suspension_end_date.strftime('%Y-%m-%d') }}</small>{% endif %}
+                                {% else %}
+                                    <span class="badge bg-success">Active</span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                {% if current_user.has_role('system_admin') or current_user.has_role('general_manager') %}
+                                    {# Add a check to hide buttons for the root admin or self #}
+                                    {% if user.id != 1 and user.id != current_user.id %}
+                                        <a href="{{ url_for('edit_user', user_id=user.id) }}" class="btn btn-sm btn-outline-secondary me-2">Edit Details</a>
+                                        
+                                        {% if user.is_suspended %}
+                                            <button type="button" class="btn btn-sm btn-success reinstate-user-btn me-2" data-user-id="{{ user.id }}">
+                                                <i class="fas fa-undo me-1"></i> Reinstate
+                                            </button>
+                                        {% else %}
+                                            <button type="button" class="btn btn-sm btn-warning text-dark suspend-user-list-btn me-2"
+                                                    data-bs-toggle="modal" data-bs-target="#suspendUserModal"
+                                                    data-user-id="{{ user.id }}"
+                                                    data-user-name="{{ user.full_name }}">
+                                                <i class="fas fa-ban me-1"></i> Suspend
+                                            </button>
+                                        {% endif %}
+                                        
+                                        <form action="{{ url_for('delete_user', user_id=user.id) }}" method="post" class="d-inline">
+                                            <button type="submit" class="btn btn-sm btn-outline-danger" onclick="return confirm('Are you sure you want to delete this user? This is permanent.')">Delete</button>
+                                        </form>
+                                    {% else %}
+                                        <span class="badge bg-secondary">Protected</span>
+                                    {% endif %}
+                                {% else %}
+                                    <span class="text-muted small">No actions available</span>
+                                {% endif %}
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+
+{# NEW: Bootstrap Modal Structure for Suspension Controls (same as in edit_user before, but needed here) #}
+<div class="modal fade" id="suspendUserModal" tabindex="-1" aria-labelledby="suspendUserModalLabel" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content">
+      {# Content will be loaded here dynamically #}
+    </div>
+  </div>
+</div>
+
+{% block scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    // Password toggle (existing) - if any password fields are dynamically loaded elsewhere
+    document.querySelectorAll('.password-toggle-btn').forEach(button => {
+        button.addEventListener('click', function () {
+            const passwordInput = this.closest('.input-group').querySelector('input');
+            const eyeIcon = this.querySelector('i');
+            if (passwordInput) {
+                const type = passwordInput.getAttribute('type') === 'password' ? 'text' : 'password';
+                passwordInput.setAttribute('type', type);
+                eyeIcon.classList.toggle('fa-eye-slash');
+            }
+        });
+    });
+
+    // --- NEW: Suspension Modal Logic ---
+    const suspendUserModal = document.getElementById('suspendUserModal');
+    if (suspendUserModal) {
+        suspendUserModal.addEventListener('show.bs.modal', async function (event) {
+            const button = event.relatedTarget; 
+            const userId = button.dataset.userId;
+            const userName = button.dataset.userName; // Get user name for dynamic title
+
+            if (userId) {
+                const modalContent = suspendUserModal.querySelector('.modal-content');
+                try {
+                    const response = await fetch(`/suspend_user_modal_content/${userId}`);
+                    if (response.ok) {
+                        modalContent.innerHTML = await response.text();
+                        const modalTitle = modalContent.querySelector('#suspendUserModalLabel');
+                        if (modalTitle) modalTitle.textContent = `Manage Suspension for ${userName}`;
+
+                        const form = modalContent.querySelector('#suspend-user-form');
+                        if (form) {
+                            form.addEventListener('submit', async function(e) {
+                                e.preventDefault();
+                                
+                                const formData = new FormData(form);
+                                const submitButton = e.submitter;
+                                if (submitButton && submitButton.name === 'action') {
+                                    formData.append('action', submitButton.value);
+                                } else {
+                                    formData.append('action', 'update_suspension_details'); // Fallback
+                                }
+                                
+                                // --- MODIFIED LINE: Use userId from the dataset, not Jinja's 'user.id' ---
+                                const formResponse = await fetch(`{{ url_for('edit_user', user_id=12345) }}`.replace('12345', userId), { // Placeholder 12345
+                                    method: 'POST',
+                                    body: formData,
+                                    headers: {
+                                        'X-Requested-With': 'XMLHttpRequest'
+                                    }
+                                });
+                                // --- END MODIFIED ---
+                                
+                                const result = await formResponse.json(); 
+
+                                document.querySelectorAll('.alert').forEach(alert => alert.remove());
+
+                                if (result.status === 'success') {
+                                    flashMessage(result.message, 'success'); 
+                                    suspendUserModal.querySelector('.btn-close').click();
+                                    location.reload(); 
+                                } else {
+                                    flashMessage(result.message || 'An unknown error occurred.', 'danger');
+                                    modalContent.innerHTML = await formResponse.text();
+                                    const newForm = modalContent.querySelector('#suspend-user-form');
+                                    if (newForm) {
+                                         newForm.addEventListener('submit', arguments.callee);
+                                    }
+                                }
+                            });
+                        }
+
+                    } else {
+                        modalContent.innerHTML = `<div class="modal-header"><h5 class="modal-title">Error</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div><div class="modal-body text-danger">Failed to load suspension form. Status: ${response.status}</div>`;
+                    }
+                } catch (error) {
+                    modalContent.innerHTML = `<div class="modal-header"><h5 class="modal-title">Error</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div><div class="modal-body text-danger">An error occurred: ${error.message}</div>`;
+                    console.error("Error loading suspend user modal content:", error);
+                }
+            }
+        });
+        suspendUserModal.addEventListener('hidden.bs.modal', function () {
+            this.querySelector('.modal-content').innerHTML = '';
+        });
+    }
+
+    // --- NEW: Reinstate User Button Logic (from manage_users list) ---
+    document.addEventListener('click', async function(event) {
+        if (event.target.classList.contains('reinstate-user-btn')) {
+            const reinstateButton = event.target;
+            const userId = reinstateButton.dataset.userId;
+            
+            if (confirm('Are you sure you want to reinstate this user? Their suspension will be immediately lifted and all related data cleared.')) {
+                try {
+                    const response = await fetch(`/users/reinstate/${userId}`, { 
+                        method: 'POST',
+                        headers: {
+                            'X-Requested-With': 'XMLHttpRequest'
+                        }
+                    });
+                    const result = await response.json();
+                    if (result.status === 'success') {
+                        flashMessage(result.message, 'success');
+                        location.reload(); 
+                    } else {
+                        flashMessage(result.message || 'Failed to reinstate user.', 'danger');
+                    }
+                } catch (error) {
+                    flashMessage('An error occurred during reinstatement.', 'danger');
+                    console.error("Error during reinstatement:", error);
+                }
+            }
+        }
+    });
+
+    // Helper for flash messages (if not global)
+    function flashMessage(message, category) {
+        const toastContainer = document.querySelector('.toast-container');
+        if (!toastContainer) {
+            const body = document.body;
+            const newToastContainer = document.createElement('div');
+            newToastContainer.classList.add('toast-container', 'position-fixed', 'top-0', 'end-0', 'p-3');
+            newToastContainer.style.zIndex = '1080';
+            body.appendChild(newToastContainer);
+            return flashMessage(message, category); 
+        }
+
+        const toastHTML = `
+            <div class="toast align-items-center text-white bg-${category} border-0" role="alert" aria-live="assertive" aria-atomic="true">
+                <div class="d-flex">
+                    <div class="toast-body">${message}</div>
+                    <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast" aria-label="Close"></button>
+                </div>
+            </div>`;
+        toastContainer.insertAdjacentHTML('beforeend', toastHTML);
+        const newToastEl = toastContainer.lastElementChild;
+        const newToast = new bootstrap.Toast(newToastEl);
+        newToast.show();
+        newToastEl.addEventListener('hidden.bs.toast', () => newToastEl.remove());
+    }
+
+
+    // --- NEW: Filtering and Sorting Logic ---
+    const roleFilter = document.getElementById('roleFilter');
+    const userTable = document.getElementById('userTable');
+    const tableBody = userTable.querySelector('tbody');
+    let currentRowOrder = Array.from(tableBody.querySelectorAll('tr')); // Store initial row order
+    let sortDirection = 'asc'; // Initial sort direction
+
+    function applyFiltersAndSort() {
+        const selectedRole = roleFilter.value;
+        let filteredRows = [];
+
+        // Apply filter
+        currentRowOrder.forEach(row => {
+            const userRoles = row.dataset.roles ? row.dataset.roles.split(',') : [];
+            const isVisible = selectedRole === '' || userRoles.includes(selectedRole);
+            row.style.display = isVisible ? '' : 'none';
+            if (isVisible) {
+                filteredRows.push(row);
+            }
+        });
+
+        // Apply sort
+        filteredRows.sort((rowA, rowB) => {
+            const roleA = rowA.querySelector('td[data-sort-value]').dataset.sortValue || '';
+            const roleB = rowB.querySelector('td[data-sort-value]').dataset.sortValue || '';
+
+            let comparison = 0;
+            if (roleA > roleB) {
+                comparison = 1;
+            } else if (roleA < roleB) {
+                comparison = -1;
+            }
+            return sortDirection === 'asc' ? comparison : comparison * -1;
+        });
+
+        // Re-append sorted and filtered rows to the table
+        tableBody.innerHTML = ''; // Clear existing rows
+        filteredRows.forEach(row => tableBody.appendChild(row));
+    }
+
+    // Event Listener for Role Filter
+    if (roleFilter) {
+        roleFilter.addEventListener('change', applyFiltersAndSort);
+    }
+
+    // Event Listener for Role Sort
+    const roleSortHeader = userTable.querySelector('th[data-sort-by="role"]');
+    if (roleSortHeader) {
+        roleSortHeader.style.cursor = 'pointer'; // Indicate it's clickable
+        roleSortHeader.addEventListener('click', function() {
+            sortDirection = sortDirection === 'asc' ? 'desc' : 'asc';
+            // Update sort icon
+            const sortIcon = this.querySelector('i.fa-sort, i.fa-sort-up, i.fa-sort-down');
+            if (sortIcon) {
+                sortIcon.classList.remove('fa-sort', 'fa-sort-up', 'fa-sort-down');
+                if (sortDirection === 'asc') {
+                    sortIcon.classList.add('fa-sort-up');
+                } else {
+                    sortIcon.classList.add('fa-sort-down');
+                }
+            }
+            applyFiltersAndSort();
+        });
+    }
+
+    // Initial application of filters/sorts when the page loads
+    applyFiltersAndSort();
+
+});
+</script>
+{% endblock scripts %}
+{% endblock %}

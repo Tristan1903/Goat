@@ -1,0 +1,219 @@
+<!-- START OF FILE products.html -->
+
+{% extends "base.html" %}
+
+{% block title %}Manage Products{% endblock %}
+
+{% block content %}
+<div class="container mt-4">
+    <div class="card shadow-sm">
+        <div class="card-body p-4 p-md-5">
+
+            <h2 class="card-title mb-2">Manage Products</h2>
+            <p class="text-muted mb-4">Add, edit, or delete inventory items.</p>
+
+            <div class="p-4 rounded-3 mb-4" style="background-color: #f8f9fa;">
+                <h4 class="mb-3">Add a New Product</h4>
+                <form action="{{ url_for('products') }}" method="POST">
+                    <div class="row g-3 form-row-halved">
+                        <div class="col-md-4">
+                            <label for="name" class="form-label">Product Name</label>
+                            <input type="text" id="name" name="name" class="form-control" required>
+                        </div>
+                        <div class="col-md-4">
+                            <label for="type" class="form-label">Product Type</label>
+                            <input type="text" id="type" name="type" class="form-control" required placeholder="e.g., Beer, Wine, Garnish">
+                        </div>
+                        <div class="col-md-4">
+                            <label for="unit_of_measure" class="form-label">Unit of Measure</label>
+                            <input type="text" id="unit_of_measure" name="unit_of_measure" class="form-control" required placeholder="e.g., Bottles, kg, L">
+                        </div>
+                        {# NEW: Add Product Number input #}
+                        <div class="col-md-4">
+                            <label for="product_number" class="form-label">Product # (Optional)</label>
+                            <input type="text" id="product_number" name="product_number" class="form-control" placeholder="e.g., SKU-12345">
+                        </div>
+                        <div class="col-md-4">
+                            <label for="unit_price" class="form-label">Unit Price (Optional)</label>
+                            <div class="input-group">
+                                <span class="input-group-text">R</span>
+                                <input type="number" id="unit_price" name="unit_price" class="form-control" min="0" step="0.01" placeholder="e.g., 25.50">
+                            </div>
+                        </div>
+                        <div class="col-md-4 d-flex align-items-end">
+                            <button type="submit" class="btn btn-primary w-100">Add Product</button>
+                        </div>
+                    </div>
+                </form>
+            </div>
+
+            <h4 class="mb-3">Existing Products</h4>
+            {% if products %}
+                <div class="table-responsive">
+                    <table class="table table-hover">
+                        <thead class="table-dark">
+                            <tr>
+                                <th>Product Name</th>
+                                <th>Type</th>
+                                <th>Unit of Measure</th>
+                                {# NEW: Add table header for Product Number #}
+                                <th>Product #</th> 
+                                <th>Unit Price</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for product in products %}
+                            <tr>
+                                <td>{{ product.name }}</td>
+                                <td>{{ product.type }}</td>
+                                <td>{{ product.unit_of_measure }}</td>
+                                {# NEW: Display Product Number #}
+                                <td>{{ product.product_number if product.product_number is not none else 'N/A' }}</td>
+                                <td>R{{ "%.2f"|format(product.unit_price) if product.unit_price is not none else 'N/A' }}</td>
+                                <td>
+                                    {# NEW: Set Stock button #}
+                                    {% if current_user.has_role('manager') or current_user.has_role('general_manager') or current_user.has_role('system_admin') %}
+                                    <button type="button" class="btn btn-sm btn-outline-success me-2 set-stock-btn"
+                                            data-bs-toggle="modal" data-bs-target="#setStockModal"
+                                            data-product-id="{{ product.id }}"
+                                            data-product-name="{{ product.name }}"
+                                            data-product-unit="{{ product.unit_of_measure }}">
+                                        Set Stock
+                                    </button>
+                                    {% endif %}
+                                    <a href="{{ url_for('edit_product', product_id=product.id) }}" class="btn btn-sm btn-outline-secondary me-2">Edit</a>
+                                    <form action="{{ url_for('delete_product', product_id=product.id) }}" method="post" class="d-inline">
+                                        <button type="submit" class="btn btn-sm btn-outline-danger" onclick="return confirm('Are you sure you want to delete this product? This action cannot be undone.')">Delete</button>
+                                    </form>
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            {% else %}
+                <p class="text-muted">No products found. Please add one using the form above.</p>
+            {% endif %}
+
+        </div>
+    </div>
+</div>
+
+{# NEW: Bootstrap Modal Structure for Set Stock #}
+<div class="modal fade" id="setStockModal" tabindex="-1" aria-labelledby="setStockModalLabel" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content">
+      {# Content will be loaded here dynamically #}
+    </div>
+  </div>
+</div>
+
+{% block scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const setStockModal = document.getElementById('setStockModal');
+    if (setStockModal) {
+        setStockModal.addEventListener('show.bs.modal', async function (event) {
+            const button = event.relatedTarget; 
+            const productId = button.dataset.productId;
+            const productName = button.dataset.productName;
+            const productUnit = button.dataset.productUnit;
+
+            if (productId) {
+                const modalContent = setStockModal.querySelector('.modal-content');
+                // Dynamically load content from Flask route
+                try {
+                    const response = await fetch(`/set_product_stock/${productId}`);
+                    if (response.ok) {
+                        modalContent.innerHTML = await response.text();
+                        // Update modal title with product name (already present in partial)
+                        const modalTitle = modalContent.querySelector('#setStockModalLabel');
+                        if (modalTitle) modalTitle.textContent = `Set Stock for ${productName}`;
+                        // Update unit of measure display in the form (already present in partial)
+                        const unitSpan = modalContent.querySelector('#product-unit-display');
+                        if (unitSpan) unitSpan.textContent = productUnit;
+                        
+                        // --- NEW: Attach submit handler to the dynamically loaded form ---
+                        const form = modalContent.querySelector('#set-stock-form'); // Target the form by its ID
+                        if (form) {
+                            form.addEventListener('submit', async function(e) {
+                                e.preventDefault(); // Prevent default form submission
+                                
+                                const formData = new FormData(form);
+                                const formResponse = await fetch(form.action, {
+                                    method: 'POST',
+                                    body: formData,
+                                    headers: {
+                                        'X-Requested-With': 'XMLHttpRequest' // Indicate AJAX request
+                                    }
+                                });
+                                
+                                const result = await formResponse.json(); // Expect JSON response from Flask
+
+                                // Clear existing flash messages (if any were generated by Flask's jsonify)
+                                // This is a workaround as Flask's flash messages are for full page redirects
+                                document.querySelectorAll('.alert').forEach(alert => alert.remove());
+
+                                if (result.status === 'success') {
+                                    flashMessage(result.message, 'success'); // Show success message
+                                    setStockModal.querySelector('.btn-close').click(); // Close the modal
+                                    location.reload(); // Reload the products page to show updated info
+                                } else {
+                                    // If an error, Flask's set_product_stock route renders the modal content again.
+                                    // We need to re-insert the error-containing HTML response into the modal.
+                                    modalContent.innerHTML = await formResponse.text(); // Re-render modal content with errors
+                                    // Flash the error message if result.message exists
+                                    if (result.message) {
+                                         flashMessage(result.message, 'danger');
+                                    } else {
+                                        flashMessage('An unknown error occurred during stock update.', 'danger');
+                                    }
+                                    // Re-attach the submit listener after re-rendering the modal content
+                                    const newForm = modalContent.querySelector('#set-stock-form');
+                                    if (newForm) {
+                                        // Recursively call the setup function or explicitly bind if needed
+                                        // For simplicity, just close and let user retry. A more advanced pattern would re-attach.
+                                        // Let's re-attach a simplified listener here.
+                                         newForm.addEventListener('submit', arguments.callee); // Re-attach this same listener
+                                    }
+                                }
+                            });
+                        }
+
+                    } else {
+                        modalContent.innerHTML = `<div class="modal-header"><h5 class="modal-title">Error</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div><div class="modal-body text-danger">Failed to load stock form. Status: ${response.status}</div>`;
+                    }
+                } catch (error) {
+                    modalContent.innerHTML = `<div class="modal-header"><h5 class="modal-title">Error</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div><div class="modal-body text-danger">An error occurred: ${error.message}</div>`;
+                    console.error("Error loading set product stock modal content:", error);
+                }
+            }
+        });
+        setStockModal.addEventListener('hidden.bs.modal', function () {
+            this.querySelector('.modal-content').innerHTML = ''; // Clear modal content when hidden
+        });
+    }
+
+    // Helper for flash messages (re-used from other places, ensure it's here)
+    function flashMessage(message, category) {
+        const toastContainer = document.querySelector('.toast-container');
+        if (!toastContainer) return;
+
+        const toastHTML = `
+            <div class="toast align-items-center text-white bg-${category} border-0" role="alert" aria-live="assertive" aria-atomic="true">
+                <div class="d-flex">
+                    <div class="toast-body">${message}</div>
+                    <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast" aria-label="Close"></button>
+                </div>
+            </div>`;
+        toastContainer.insertAdjacentHTML('beforeend', toastHTML);
+        const newToastEl = toastContainer.lastElementChild;
+        const newToast = new bootstrap.Toast(newToastEl);
+        newToast.show();
+        newToastEl.addEventListener('hidden.bs.toast', () => newToastEl.remove());
+    }
+});
+</script>
+{% endblock scripts %}
+{% endblock %}

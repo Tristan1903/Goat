@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+
+{% block title %}Active Users{% endblock %}
+
+{% block content %}
+<div class="container mt-4">
+    <div class="card shadow-sm">
+        <div class="card-body p-4 p-md-5">
+            <h2 class="card-title mb-2">Active Users</h2>
+            <p class="text-muted mb-4">Users who have been active in the last 5 minutes are shown below.</p>
+
+            <div class="table-responsive">
+                <table class="table table-hover">
+                    <thead class="table-dark">
+                        <tr>
+                            <th>Full Name</th>
+                            <th>Username</th>
+                            <th>Role(s)</th>
+                            <th>Last Seen</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for user in users %}
+                        <tr>
+                            <td class="fw-bold">{{ user.full_name }}</td>
+                            <td>{{ user.username }}</td>
+                            <!-- --- THIS IS THE CORRECTED SECTION --- -->
+                            <td>
+                                {% for role in user.roles %}
+                                    <span class="badge bg-secondary">{{ role.name.replace('_', ' ').title() }}</span>
+                                {% endfor %}
+                            </td>
+                            <td>{{ user.last_seen.strftime('%Y-%m-%d %H:%M:%S') }} UTC</td>
+                            <td>
+                                {% if user.id != current_user.id and not user.force_logout_requested %}
+                                    <form action="{{ url_for('force_logout', user_id=user.id) }}" method="post" class="d-inline">
+                                        <button type="submit" class="btn btn-sm btn-outline-warning" onclick="return confirm('Are you sure you want to log this user out? They will be signed out on their next click.')">
+                                            <i class="fas fa-sign-out-alt me-1"></i> Force Logout
+                                        </button>
+                                    </form>
+                                {% elif user.force_logout_requested %}
+                                    <span class="badge bg-secondary">Logout Pending...</span>
+                                {% else %}
+                                    <span class="text-muted small">Your Account</span>
+                                {% endif %}
+                            </td>
+                        </tr>
+                        {% else %}
+                        <tr>
+                            <td colspan="5" class="text-center text-muted">No users have been active recently.</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

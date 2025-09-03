@@ -1,0 +1,37 @@
+{# This template is intended to be loaded dynamically into a Bootstrap modal #}
+
+<div class="modal-header">
+    <h5 class="modal-title" id="varianceExplanationModalLabel">
+        {% if existing_explanation %}Edit Explanation{% else %}Explain Variance{% endif %} for {{ count_entry.product.name }}
+    </h5>
+    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+</div>
+<form action="{{ url_for('explain_variance', count_id=count_entry.id) }}" method="POST">
+    <div class="modal-body">
+        <p><strong>Product:</strong> {{ count_entry.product.name }} ({{ count_entry.product.unit_of_measure }})</p>
+        <p><strong>Location:</strong> {{ count_entry.location }}</p>
+        <p><strong>Count Type:</strong> {{ count_entry.count_type }}</p>
+        <p><strong>Counted By:</strong> {{ count_entry.user.full_name }}</p>
+        <p><strong>Actual Amount:</strong> {{ count_entry.amount|round(2) }}</p>
+        <p><strong>Expected Amount:</strong> {{ count_entry.expected_amount|round(2) if count_entry.expected_amount is not none else 'N/A' }}</p>
+        <p><strong>Variance:</strong> 
+            {% if count_entry.variance_amount is not none %}
+                {% set variance = count_entry.variance_amount|round(2) %}
+                {% if variance > 0 %}<span class="text-success fw-bold">+{{ variance }}</span>
+                {% elif variance < 0 %}<span class="text-danger fw-bold">{{ variance }}</span>
+                {% else %}<span class="text-muted">0</span>{% endif %}
+            {% else %}
+                <span class="text-muted">N/A</span>
+            {% endif %}
+        </p>
+        <hr>
+        <div class="mb-3">
+            <label for="reason" class="form-label">Reason for Variance</label>
+            <textarea class="form-control" id="reason" name="reason" rows="4" required>{{ existing_explanation.reason if existing_explanation else '' }}</textarea>
+        </div>
+    </div>
+    <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+        <button type="submit" class="btn btn-primary">Save Explanation</button>
+    </div>
+</form>

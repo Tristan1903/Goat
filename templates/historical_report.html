@@ -1,0 +1,196 @@
+{% extends "base.html" %}
+
+{% block title %}Historical Variance Report{% endblock %}
+
+{% block content %}
+<div class="container mt-4">
+    <div class="card shadow-sm">
+        <div class="card-body p-4 p-md-5">
+            <h2 class="card-title mb-2">Historical Variance Report</h2>
+            <p class="text-muted mb-4">Analyze the variance trends for a specific product over the last 30 days, incorporating deliveries and all sales.</p>
+
+            <div class="p-4 rounded-3 mb-4" style="background-color: #f8f9fa;">
+                <h4 class="mb-3">Select a Product</h4>
+                <div class="row g-2 align-items-center">
+                    <div class="col-sm-8">
+                        <select id="product-select" class="form-select form-select-lg">
+                            <option selected disabled>Choose a product to analyze...</option>
+                            {% for product in products %}
+                                <option value="{{ product.id }}">{{ product.name }} ({{ product.unit_of_measure }})</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="col-sm-4">
+                        <p class="form-text">Data for the last 30 days will be shown.</p>
+                    </div>
+                </div>
+            </div>
+            
+            <div>
+                {# Added a message when no product is selected #}
+                <div id="chart-message" class="alert alert-info text-center" style="display: none;">
+                    Please select a product to view its historical variance.
+                </div>
+                <canvas id="varianceChart" style="display: none;"></canvas> {# Initially hidden #}
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Include the Chart.js library -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+{% block scripts %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script>
+    document.addEventListener('DOMContentLoaded', function () {
+        const productSelect = document.getElementById('product-select');
+        const chartContainer = document.getElementById('varianceChart').parentElement; // Get parent to re-insert canvas
+        const chartMessage = document.getElementById('chart-message');
+        let varianceChart; // Declare it once
+
+        // Helper to destroy and recreate the canvas element
+        function recreateCanvas() {
+            if (varianceChart) {
+                varianceChart.destroy();
+                varianceChart = null; // Clear the reference
+            }
+            // Remove old canvas
+            const oldCanvas = document.getElementById('varianceChart');
+            if (oldCanvas) {
+                oldCanvas.remove();
+            }
+            // Create new canvas
+            const newCanvas = document.createElement('canvas');
+            newCanvas.id = 'varianceChart';
+            newCanvas.style.display = 'none'; // Keep hidden initially
+            chartContainer.appendChild(newCanvas);
+            return newCanvas.getContext('2d');
+        }
+
+        let ctx = recreateCanvas(); // Initialize ctx by recreating canvas
+
+
+        function showChart(show) {
+            if (show) {
+                ctx.canvas.style.display = 'block'; // Access canvas via ctx.canvas
+                chartMessage.style.display = 'none';
+            } else {
+                ctx.canvas.style.display = 'none';
+                chartMessage.style.display = 'block';
+            }
+        }
+
+        if (!productSelect.value || isNaN(parseInt(productSelect.value))) {
+            showChart(false);
+            chartMessage.textContent = "Please select a product to view its historical variance.";
+        }
+
+        async function updateChart(productId) {
+            if (!productId || isNaN(parseInt(productId))) {
+                showChart(false);
+                chartMessage.textContent = "Please select a valid product to view its historical variance.";
+                return;
+            }
+
+            try {
+                const response = await fetch(`/api/variance-history/${productId}`);
+                if (!response.ok) {
+                    const errorData = await response.json().catch(() => ({error: `Server responded with status ${response.status}`}));
+                    showChart(false);
+                    chartMessage.textContent = errorData.error || "An unexpected server error occurred.";
+                    console.error("API Error:", response.status, errorData);
+                    return;
+                }
+
+                const chartData = await response.json();
+
+                // Recreate canvas context before creating new chart
+                ctx = recreateCanvas(); 
+
+                if (!chartData.labels || chartData.labels.length === 0 || !chartData.data || chartData.data.every(d => d === null)) {
+                    showChart(false);
+                    chartMessage.textContent = "No historical variance data available for this product for the last 30 days or all data is null.";
+                    return;
+                }
+
+                showChart(true); 
+
+                varianceChart = new Chart(ctx, {
+                    type: 'line',
+                    data: {
+                        labels: chartData.labels,
+                        datasets: [{
+                            label: 'Daily Variance (Actual - Expected)',
+                            data: chartData.data,
+                            fill: false,
+                            borderColor: 'rgb(75, 192, 192)',
+                            tension: 0.1,
+                            pointRadius: 5,
+                            pointBackgroundColor: function(context) {
+                                const value = context.dataset.data[context.dataIndex];
+                                if (value === null) return 'grey';
+                                return value < 0 ? 'red' : value > 0 ? 'green' : 'blue';
+                            },
+                            spanGaps: true
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        scales: {
+                            y: {
+                                beginAtZero: false,
+                                title: {
+                                    display: true,
+                                    text: 'Variance (Units)'
+                                }
+                            }
+                        },
+                        plugins: {
+                            title: {
+                                display: true,
+                                text: `Variance Trend for ${productSelect.options[productSelect.selectedIndex].text} (Last 30 Days)`,
+                                font: {
+                                    size: 18
+                                }
+                            },
+                            tooltip: {
+                                callbacks: {
+                                    label: function(context) {
+                                        let label = context.dataset.label || '';
+                                        if (label) {
+                                            label += ': ';
+                                        }
+                                        if (context.parsed.y !== null) {
+                                            label += new Intl.NumberFormat('en-US', { maximumFractionDigits: 2 }).format(context.parsed.y);
+                                        } else {
+                                            label += 'No Count Data';
+                                        }
+                                        return label;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                });
+            } catch (error) {
+                console.error('Error fetching chart data:', error);
+                showChart(false);
+                chartMessage.textContent = "Error loading historical data: " + error.message;
+            }
+        }
+
+        productSelect.addEventListener('change', function () {
+            updateChart(this.value);
+        });
+
+        if (productSelect.value && !isNaN(parseInt(productSelect.value))) {
+            updateChart(productSelect.value);
+        } else {
+            showChart(false);
+        }
+    });
+</script>
+{% endblock scripts %}
+{% endblock %}

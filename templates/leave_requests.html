@@ -1,0 +1,90 @@
+{% extends "base.html" %}
+
+{% block title %}Leave Requests{% endblock %}
+
+{% block content %}
+<div class="container mt-4">
+    <div class="card shadow-sm">
+        <div class="card-body p-4 p-md-5">
+            <h2 class="card-title mb-2">Leave Requests</h2>
+            <p class="text-muted mb-4">Submit and review requests for time off.</p>
+            <div class="p-4 rounded-3 mb-4" style="background-color: #f8f9fa;">
+                <h4 class="mb-3">Submit a New Request</h4>
+                <form method="POST" enctype="multipart/form-data">
+                    <div class="row g-3">
+                        <div class="col-md-6">
+                            <label for="start_date" class="form-label">Start Date</label>
+                            <input type="date" id="start_date" name="start_date" class="form-control" required>
+                        </div>
+                        <div class="col-md-6">
+                            <label for="end_date" class="form-label">End Date</label>
+                            <input type="date" id="end_date" name="end_date" class="form-control" required>
+                        </div>
+                        <div class="col-12">
+                            <label for="reason" class="form-label">Reason</label>
+                            <textarea id="reason" name="reason" class="form-control" rows="3" required></textarea>
+                        </div>
+                        <div class="col-12">
+                            <label for="document" class="form-label">Supporting Document (Optional)</label>
+                            <input class="form-control" type="file" id="document" name="document">
+                        </div>
+                        <div class="col-12 d-grid">
+                            <button type="submit" class="btn btn-primary">Submit Request</button>
+                        </div>
+                    </div>
+                </form>
+            </div>
+
+            <h4 class="mb-3">Request History</h4>
+            <div class="table-responsive">
+                <table class="table">
+                    <thead>
+                        <tr>
+                            {% if current_user.has_role('manager') or current_user.has_role('general_manager') or current_user.has_role('system_admin') %}
+                                <th>Employee</th>
+                            {% endif %}
+                            <th>Dates</th>
+                            <th>Reason</th>
+                            <th>Status</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for req in requests %}
+                        <tr>
+                            {% if current_user.has_role('manager') or current_user.has_role('general_manager') or current_user.has_role('system_admin') %}<td>{{ req.user.full_name }}</td>{% endif %}
+                            <td>{{ req.start_date.strftime('%b %d') }} - {{ req.end_date.strftime('%b %d, %Y') }}</td>
+                            <td>{{ req.reason }}</td>
+                            <td>
+                                <span class="badge
+                                    {% if req.status == 'Approved' %}bg-success
+                                    {% elif req.status == 'Denied' %}bg-danger
+                                    {% else %}bg-secondary{% endif %}">{{ req.status }}</span>
+                            </td>
+                            <td>
+                                {% if current_user.has_role('manager') or current_user.has_role('general_manager') or current_user.has_role('system_admin') %}
+                                    {% if req.status == 'Pending' %}
+                                    <form action="{{ url_for('update_leave_status', req_id=req.id, status='Approved') }}" method="post" class="d-inline">
+                                        <button class="btn btn-sm btn-outline-success">Approve</button>
+                                    </form>
+                                    <form action="{{ url_for('update_leave_status', req_id=req.id, status='Denied') }}" method="post" class="d-inline">
+                                        <button class="btn btn-sm btn-outline-danger">Deny</button>
+                                    </form>
+                                    {% endif %}
+                                {% endif %}
+                                {# NEW: Display link to document if it exists #}
+                                {% if req.document_path %}
+                                    <a href="{{ url_for('view_leave_document', req_id=req.id) }}" target="_blank" class="btn btn-sm btn-info ms-2">View Document</a>
+                                {% endif %}
+                            </td>
+                        </tr>
+                        {% else %}
+                        <tr><td colspan="{% if current_user.has_role('manager') or current_user.has_role('general_manager') or current_user.has_role('system_admin') %}5{% else %}4{% endif %}" class="text-center text-muted">No requests found.</td></tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
