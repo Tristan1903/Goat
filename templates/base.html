@@ -157,8 +157,15 @@
                                 {% else %}
                                     <li class="p-2 text-center text-muted small">No recent announcements.</li>
                                 {% endfor %}
-                                <li class="p-2 border-top text-center"><a href="{{ url_for('announcements') }}">View all announcements</a></li>
-
+                                <li class="p-2 border-top text-center">
+                                    <a href="{{ url_for('announcements') }}">View all announcements</a>
+                                </li>
+                                <!-- NEW: Push Notification Button/Status -->
+                                <li class="p-2 border-top text-center" id="push-notification-status-area">
+                                    <div class="onesignal-customlink-container" >
+                                    <button id="enablePushNotifications" class="btn btn-sm btn-primary">Enable Notifications</button></div>
+                                    <span id="pushNotificationStatus" class="small text-muted" style="display: none;"></span>
+                                </li>
                             </ul>
                         </li>
                         <li class="nav-item dropdown">
@@ -307,6 +314,118 @@
         setInterval(checkForNewAnnouncements, 10000);
     </script>
     {% endif %}
-    {% block scripts %}{% endblock %}
+    {% block scripts %}
+    <script>
+        // Dynamically load OneSignal SDK script
+        (function() {
+            var script = document.createElement('script');
+            script.src = "https://cdn.onesignal.com/sdks/OneSignalSDK.js";
+            script.async = true;
+            document.head.appendChild(script);
+        })();
+
+        window.OneSignal = window.OneSignal || [];
+        OneSignal.push(function() {
+            // OneSignal Initialization
+            OneSignal.init({
+                appId: "{{config['ONESIGNAL_APP_ID'] }}",
+                safari_web_id: 'YOUR_SAFARI_WEB_ID', // Only if you plan to support Safari
+                allowLocalhostAsSecureOrigin: true // IMPORTANT FOR LOCALHOST
+            });
+
+            // Set External User ID if authenticated
+            {% if current_user.is_authenticated %}
+            OneSignal.setExternalUserId("{{ current_user.id }}");
+            {% endif %}
+
+            const enablePushBtn = document.getElementById('enablePushNotifications');
+            const pushStatusSpan = document.getElementById('pushNotificationStatus');
+            const pushStatusArea = document.getElementById('push-notification-status-area');
+
+            // Function to update the button/status display
+            function updatePushNotificationUI(isSubscribed) {
+                if (!pushStatusArea) return; // Exit if the area doesn't exist
+
+                if (isSubscribed) {
+                    if (enablePushBtn) enablePushBtn.style.display = 'none';
+                    if (pushStatusSpan) {
+                        pushStatusSpan.textContent = 'Notifications are enabled.';
+                        pushStatusSpan.style.display = 'inline';
+                        pushStatusSpan.classList.remove('text-danger');
+                        pushStatusSpan.classList.add('text-success');
+                    }
+                } else {
+                    // Not subscribed, but might be blocked
+                    OneSignal.getNotificationPermission(function(permission) {
+                        if (permission === 'denied') {
+                            if (enablePushBtn) enablePushBtn.style.display = 'none';
+                            if (pushStatusSpan) {
+                                pushStatusSpan.innerHTML = 'Notifications are blocked. Please allow them in your browser settings.';
+                                pushStatusSpan.style.display = 'inline';
+                                pushStatusSpan.classList.remove('text-success');
+                                pushStatusSpan.classList.add('text-danger');
+                            }
+                        } else {
+                            // Not subscribed, but permission is 'default' or 'granted'
+                            if (enablePushBtn) enablePushBtn.style.display = 'inline';
+                            if (pushStatusSpan) pushStatusSpan.style.display = 'none';
+                        }
+                    });
+                }
+            }
+
+            // Initial check and UI update on load
+            OneSignal.isPushNotificationsEnabled(function(isSubscribed) {
+                updatePushNotificationUI(isSubscribed);
+            });
+
+            // Event listener for when the user clicks the "Enable Notifications" button
+            if (enablePushBtn) {
+                enablePushBtn.addEventListener('click', function() {
+                    OneSignal.push(function() {
+                        OneSignal.showNativePrompt(); // Show the browser's native prompt
+                        // After the prompt, check subscription status again
+                        OneSignal.isPushNotificationsEnabled(function(isSubscribed) {
+                            updatePushNotificationUI(isSubscribed);
+                        });
+                    });
+                });
+            }
+
+            // Listen for subscription changes (e.g., user enables notifications via browser prompt)
+            OneSignal.on('subscriptionChange', function (isSubscribed) {
+                console.log("OneSignal Subscription changed:", isSubscribed);
+                updatePushNotificationUI(isSubscribed);
+                if (isSubscribed) {
+                    OneSignal.getUserId(function(userId) {
+                        console.log("OneSignal Player ID:", userId);
+                        // TODO: Send this userId to your Flask backend if you need to store it
+                        // This is where you would make an AJAX call to save the player ID
+                        // For example, if you implement the /api/register-onesignal-id endpoint:
+                        /*
+                        fetch('/api/register-onesignal-id', {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json'
+                            },
+                            body: JSON.stringify({ player_id: userId })
+                        })
+                        .then(response => response.json())
+                        .then(data => {
+                            if (data.status === 'success') {
+                                console.log('OneSignal Player ID saved to backend.');
+                            } else {
+                                console.error('Failed to save OneSignal Player ID:', data.message);
+                            }
+                        })
+                        .catch(error => console.error('Error sending OneSignal Player ID:', error));
+                        */
+                    });
+                }
+            });
+        });
+    </script>
+    {# Any scripts from child templates will be appended here via {{ super() }} if they also define a 'scripts' block #}
+    {% endblock %}
 </body>
 </html>

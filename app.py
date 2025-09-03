@@ -24,6 +24,8 @@ from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from googleapiclient.http import MediaIoBaseUpload
 
+from onesignal_sdk.client import Client
+
 # ==============================================================================
 # App Configuration
 # ==============================================================================
@@ -39,6 +41,9 @@ app.config['GOOGLE_DRIVE_FOLDER_ID'] = '1-QrV8H0n5irrB_rFqkF83QXKyTv0vmXJ'
 app.config['GOOGLE_OAUTH_REDIRECT_URI'] = 'http://localhost:5000/google/callback'
 os.environ['OAUTHLIB_INSECURE_TRANSPORT'] = '1'
 
+app.config['ONESIGNAL_APP_ID'] = 'f9dc4bf9-1eb1-40d1-9f32-aa020e7fd108'
+app.config['ONESIGNAL_REST_API_KEY'] = 'os_v2_app_7hoex6i6wfandhzsviba476rbasotbs2ry7uf55hlfcdkp2gutfi5ncycpsb73idranhtmnay64mu7egq4y2wu2hqi7lf7hqnraao4q'
+
 db = SQLAlchemy(app)
 bcrypt = Bcrypt(app)
 login_manager = LoginManager(app)
@@ -46,7 +51,22 @@ login_manager.login_view = 'login'
 login_manager.login_message_category = 'info'
 
 # ==============================================================================
-# Global Shift Definitions (UPDATED/NEW)
+# Global OneSignal Client Initialization (NEW)
+# ==============================================================================
+# Initialize the OneSignal client globally here, after app.config is set.
+# This ensures it's available throughout your application without re-initializing per request.
+# You might want to wrap this in a try-except block if the keys might be missing.
+try:
+    onesignal_client = Client(
+        app_id=app.config['ONESIGNAL_APP_ID'],
+        rest_api_key=app.config['ONESIGNAL_REST_API_KEY']
+    )
+except Exception as e:
+    app.logger.error(f"Failed to initialize OneSignal client: {e}")
+    onesignal_client = None # Set to None to handle errors gracefully later
+
+# ==============================================================================
+# Global  Definitions (UPDATED/NEW)
 # ==============================================================================
 
 def get_drive_service():
@@ -726,12 +746,13 @@ def _build_week_dates():
 
     return start_of_week, week_dates, end_of_week, leave_dict
 
+# Example modification for PushSubscription (if you want to track OneSignal IDs)
 class PushSubscription(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
-    endpoint = db.Column(db.String(512), unique=True, nullable=False) # The unique URL for push messages
-    p256dh = db.Column(db.String(255), nullable=False) # Auth key
-    auth = db.Column(db.String(255), nullable=False)   # Auth secret
+    onesignal_player_id = db.Column(db.String(255), unique=True, nullable=True) # New field
+    # endpoint, p256dh, auth might become optional or removed if fully relying on OneSignal
+    # For now, keep them if you're mixing direct webpush with OneSignal or for flexibility.
     timestamp = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
 
     user = db.relationship('User', backref=db.backref('push_subscriptions', lazy=True, cascade="all, delete-orphan"))
@@ -1423,9 +1444,9 @@ def announcements():
 
 
         new_announcement = Announcement(
-            user_id=current_user.id, 
-            title=title, 
-            message=message, 
+            user_id=current_user.id,
+            title=title,
+            message=message,
             category=category,
             action_link=action_link_url
         )
@@ -1435,99 +1456,69 @@ def announcements():
         if selected_role_ids:
             target_roles_for_announcement = Role.query.filter(Role.id.in_(selected_role_ids)).all()
             new_announcement.target_roles = target_roles_for_announcement
-        
+
         db.session.commit() # Commit the new announcement first
 
         log_activity(f"Posted new announcement titled: '{title}' targeting roles: {', '.join([r.name for r in new_announcement.target_roles]) if new_announcement.target_roles else 'All Eligible'}. Action link: {action_link_url or 'None'}.")
-        
-        # --- NEW: Send Push Notifications ---
-        # VAPID keys from app.config
-        vapid_private_key = app.config['VAPID_PRIVATE_KEY']
-        vapid_public_key = app.config['VAPID_PUBLIC_KEY']
-        vapid_claims = {"sub": app.config['VAPID_CLAIMS_EMAIL']}
 
-        # Prepare push notification payload
+        # --- NEW/MODIFIED: Send Push Notifications using OneSignal SDK ---
+        # Make sure you have app.config['ONESIGNAL_APP_ID'] and app.config['ONESIGNAL_REST_API_KEY'] defined
+        from onesignal_sdk.client import Client
+        onesignal_client = Client(app_id=app.config['ONESIGNAL_APP_ID'], rest_api_key=app.config['ONESIGNAL_REST_API_KEY'])
+
         push_payload = {
-            "title": new_announcement.title,
-            "body": new_announcement.message,
-            "icon": url_for('static', filename='favicon.ico', _external=True), # Absolute URL for icon
-            "badge": url_for('static', filename='favicon.ico', _external=True), # Absolute URL for badge
+            "headings": {"en": new_announcement.title},
+            "contents": {"en": new_announcement.message},
             "url": url_for('announcements', _external=True) # Default click URL
         }
         if new_announcement.action_link:
-            push_payload['url'] = url_for(new_announcement.action_link, _external=True) # Use the specific action link
+            push_payload['url'] = new_announcement.action_link # If it's an external link, use it directly
 
-        # Get all users who should receive this announcement based on targeting
-        user_roles_ids_for_all = [role.id for role in all_roles] # Get all role IDs if not explicitly targeted
-
+        eligible_user_ids = []
         if new_announcement.target_roles:
-            # Targeted announcement: get users who have these roles
             target_role_ids = [role.id for role in new_announcement.target_roles]
             eligible_users_for_push = User.query.join(User.roles).filter(
                 Role.id.in_(target_role_ids),
-                User.is_suspended == False # Do not send pushes to suspended users
+                User.is_suspended == False
             ).distinct().all()
         else:
-            # Non-targeted announcement: send to all non-suspended users who normally see announcements
-            # This logic should mirror inject_global_data's filtering for visibility
-            eligible_users_for_push = User.query.outerjoin(User.roles).filter(
-                db.not_(Announcement.target_roles.any()), # Not targeted (general)
-                User.is_suspended == False # Do not send pushes to suspended users
-            ).distinct().all()
-            # If "broadcast to all eligible" means anyone *who can see any announcement*, it gets complex.
-            # For simplicity, if not explicitly targeted, it goes to all non-suspended staff roles.
-            # This is a simplification: for "All eligible", we'll consider non-managerial staff and managers/admins.
-            # This needs to be carefully refined based on what "All eligible" truly implies.
-            # For now, let's target all non-suspended users with a general staff/managerial role.
+            # If not targeted, send to all non-suspended staff/managerial roles
             all_staff_manager_roles = ['bartender', 'waiter', 'skullers', 'manager', 'general_manager', 'scheduler', 'system_admin']
             eligible_users_for_push = User.query.join(User.roles).filter(
                 Role.name.in_(all_staff_manager_roles),
                 User.is_suspended == False
             ).distinct().all()
 
+        # Collect external_user_ids (which map to your User.id) for OneSignal targeting
+        external_user_ids_to_notify = [str(u.id) for u in eligible_users_for_push]
 
-        sent_push_count = 0
-        failed_push_count = 0
-
-        # Collect subscriptions from eligible users
-        all_subscriptions_to_notify = PushSubscription.query.filter(
-            PushSubscription.user_id.in_([u.id for u in eligible_users_for_push])
-        ).all()
-
-        for subscription in all_subscriptions_to_notify:
-            try:
-                webpush( # Changed from send_notification to webpush
-                subscription_info={
-                    'endpoint': subscription.endpoint,
-                    'keys': {'p256dh': subscription.p256dh, 'auth': subscription.auth}
-                },
-                data=json.dumps(push_payload),
-                vapid_private_key=vapid_private_key,
-                vapid_public_key=vapid_public_key,
-                vapid_claims=vapid_claims
-)
-                sent_push_count += 1
-            except WebPushException as e:
-                app.logger.error(f"Push notification failed for user {subscription.user_id} ({subscription.endpoint}): {e}")
-                # Handle specific errors: If subscription is invalid (e.g., 410 Gone), delete it
-                if e.response and e.response.status_code == 410:
-                    app.logger.info(f"Deleting expired subscription for user {subscription.user_id} at {subscription.endpoint}.")
-                    db.session.delete(subscription)
-                    # Don't commit immediately, commit all deletions at the end.
-                failed_push_count += 1
-            except Exception as e:
-                app.logger.error(f"General error sending push notification for user {subscription.user_id}: {e}")
-                failed_push_count += 1
-
-        if failed_push_count > 0:
-            db.session.commit() # Commit deletions for expired subscriptions if any
-            flash(f'Announcement posted. Sent {sent_push_count} push notifications, {failed_push_count} failed. Check logs.', 'warning')
+        if external_user_ids_to_notify:
+            push_payload['include_external_user_ids'] = external_user_ids_to_notify
         else:
-            flash(f'Announcement posted and {sent_push_count} push notifications sent!', 'success')
-        # --- END NEW: Send Push Notifications ---
-        
+            # If no specific users are targeted, you might choose to send to a segment like 'All'
+            # Or skip sending push if there are no eligible users.
+            # For this example, if no external_user_ids, we will not send to prevent sending to everyone accidentally.
+            flash('Announcement posted, but no eligible users to send push notification to.', 'info')
+            return redirect(url_for('announcements'))
+
+
+        try:
+            onesignal_response = onesignal_client.send_notification(push_payload)
+            if onesignal_response.get('id'):
+                flash(f'Announcement posted and push notifications sent via OneSignal!', 'success')
+                log_activity(f"Sent OneSignal push notification for announcement: '{new_announcement.title}'.")
+            else:
+                flash(f'Announcement posted, but OneSignal push notifications failed to send. Check logs and OneSignal dashboard.', 'warning')
+                app.logger.error(f"OneSignal push failed: {onesignal_response}")
+
+        except Exception as e:
+            app.logger.error(f"Error sending OneSignal push notification: {e}", exc_info=True)
+            flash(f'Announcement posted, but an error occurred sending push notifications: {e}', 'danger')
+
+        # --- END NEW/MODIFIED: Send Push Notifications ---
+
         return redirect(url_for('announcements'))
-    
+
     user_roles_ids = [role.id for role in current_user.roles]
 
     announcements_for_display = Announcement.query.outerjoin(Announcement.target_roles) \
@@ -1540,8 +1531,8 @@ def announcements():
                                                   .order_by(Announcement.id.desc()) \
                                                   .all()
 
-    return render_template('announcements.html', 
-                           announcements=announcements_for_display, 
+    return render_template('announcements.html',
+                           announcements=announcements_for_display,
                            all_roles=all_roles,
                            actionable_schedule_views=actionable_schedule_views)
 
@@ -4353,6 +4344,30 @@ def assign_products(location_id):
 # ==============================================================================
 # API Routes
 # ==============================================================================
+
+@app.route('/api/register-onesignal-id', methods=['POST'])
+@login_required
+def register_onesignal_id():
+    data = request.get_json()
+    onesignal_player_id = data.get('player_id')
+
+    if not onesignal_player_id:
+        return jsonify({'status': 'error', 'message': 'Missing player_id'}), 400
+
+    # Find or create a PushSubscription for the current user
+    # You might want to remove old subscriptions if a user gets a new player ID
+    # or if you're consolidating to just OneSignal IDs.
+    subscription = PushSubscription.query.filter_by(user_id=current_user.id).first()
+    if subscription:
+        subscription.onesignal_player_id = onesignal_player_id
+        # You might clear other fields (endpoint, p256dh, auth) if fully migrating
+    else:
+        subscription = PushSubscription(user_id=current_user.id, onesignal_player_id=onesignal_player_id)
+        db.session.add(subscription)
+
+    db.session.commit()
+    log_activity(f"Registered OneSignal Player ID {onesignal_player_id} for user {current_user.full_name}.")
+    return jsonify({'status': 'success', 'message': 'OneSignal ID registered.'})
 
 @app.route('/api/latest-announcement')
 @login_required
