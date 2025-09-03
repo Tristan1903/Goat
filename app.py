@@ -10,7 +10,7 @@ from functools import wraps
 from werkzeug.utils import secure_filename
 
 from flask import (Flask, render_template, request, redirect, url_for, 
-                   flash, Response, jsonify, get_flashed_messages, session)
+                   flash, Response, jsonify, get_flashed_messages, send_from_directory, session)
 from flask_sqlalchemy import SQLAlchemy
 from flask_bcrypt import Bcrypt
 from flask_login import (LoginManager, UserMixin, login_user, logout_user, 
@@ -42,7 +42,7 @@ app.config['GOOGLE_OAUTH_REDIRECT_URI'] = 'http://localhost:5000/google/callback
 os.environ['OAUTHLIB_INSECURE_TRANSPORT'] = '1'
 
 app.config['ONESIGNAL_APP_ID'] = 'f9dc4bf9-1eb1-40d1-9f32-aa020e7fd108'
-app.config['ONESIGNAL_REST_API_KEY'] = 'os_v2_app_7hoex6i6wfandhzsviba476rbasotbs2ry7uf55hlfcdkp2gutfi5ncycpsb73idranhtmnay64mu7egq4y2wu2hqi7lf7hqnraao4q'
+app.config['ONESIGNAL_REST_API_KEY'] = 'os_v2_app_7hoex6i6wfandhzsviba476rbdtg63vwmiye4kvrodu7ool6xcd6qoykkfbzpuxx3z2akxyycf5owi7c362wgv4an5bllk525wxl3qa'
 
 db = SQLAlchemy(app)
 bcrypt = Bcrypt(app)
@@ -1504,12 +1504,15 @@ def announcements():
 
         try:
             onesignal_response = onesignal_client.send_notification(push_payload)
-            if onesignal_response.get('id'):
+            # --- CORRECTED LINE ---
+            # Check for the 'id' attribute directly on the response object
+            if hasattr(onesignal_response, 'id') and onesignal_response.id:
                 flash(f'Announcement posted and push notifications sent via OneSignal!', 'success')
                 log_activity(f"Sent OneSignal push notification for announcement: '{new_announcement.title}'.")
             else:
                 flash(f'Announcement posted, but OneSignal push notifications failed to send. Check logs and OneSignal dashboard.', 'warning')
-                app.logger.error(f"OneSignal push failed: {onesignal_response}")
+                # The response object can be printed directly for debugging
+                app.logger.error(f"OneSignal push failed: {onesignal_response.body}")
 
         except Exception as e:
             app.logger.error(f"Error sending OneSignal push notification: {e}", exc_info=True)
@@ -4344,6 +4347,10 @@ def assign_products(location_id):
 # ==============================================================================
 # API Routes
 # ==============================================================================
+
+@app.route('/OneSignalSDKWorker.js')
+def one_signal_sdk_worker():
+    return send_from_directory('static', 'OneSignalSDKWorker.js')
 
 @app.route('/api/register-onesignal-id', methods=['POST'])
 @login_required

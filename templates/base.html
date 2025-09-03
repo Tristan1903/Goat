@@ -381,7 +381,9 @@
 
             // Event listener for when the user clicks the "Enable Notifications" button
             if (enablePushBtn) {
+                
                 enablePushBtn.addEventListener('click', function() {
+                    console.log("Enable Push Notifications button found.");
                     OneSignal.push(function() {
                         OneSignal.showNativePrompt(); // Show the browser's native prompt
                         // After the prompt, check subscription status again
