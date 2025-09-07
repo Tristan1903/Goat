@@ -21,7 +21,7 @@
         <div class="mb-3">
             <label for="suspension_end_date" class="form-label">Suspension End Date (Optional)</label>
             <input type="date" id="suspension_end_date" name="suspension_end_date" class="form-control"
-                   value=""                   
+                   value="{% if user.suspension_end_date %}{{ user.suspension_end_date.strftime('%Y-%m-%d') }}{% endif %}" {# Pre-fill if exists #}                   
             <div class="form-text">Set an end date for temporary suspension. Leave blank for indefinite.</div>
         </div>
         
@@ -30,7 +30,7 @@
             <input class="form-control" type="file" id="suspension_document" name="suspension_document" accept=".pdf, .doc, .docx, image/*">
             {% if user.suspension_document_path %}
                 <div class="form-text mt-2">
-                    Current document: <a href="{{ url_for('static', filename='uploads/' + user.suspension_document_path.split('/')[-1]) }}" target="_blank">View Current Document</a>
+                    Current document: <a href="{{ user.suspension_document_path }}" target="_blank">View Current Document</a> {# Use full drive link #}
                     <div class="form-check">
                         <input class="form-check-input" type="checkbox" id="delete_suspension_document" name="delete_suspension_document" value="1">
                         <label class="form-check-label" for="delete_suspension_document">Delete Current Document</label>
@@ -45,25 +45,50 @@
     <div class="modal-footer">
         <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
         {% if user.is_suspended %}
-            <button type="submit" class="btn btn-warning text-dark" name="action" value="update_suspension_details">Update Suspension Details</button>
+            <button type="submit" class="btn btn-warning text-dark" name="action" value="update_suspension_details" id="update-suspension-btn">Update Suspension Details</button> {# Added ID #}
         {% else %}
-            <button type="submit" class="btn btn-danger" name="action" value="suspend_user">Suspend User</button>
+            <button type="submit" class="btn btn-danger" name="action" value="suspend_user" id="suspend-user-btn">Suspend User</button> {# Added ID #}
         {% endif %}
     </div>
 </form>
 
 <script>
-    // Enable/disable suspension_end_date based on whether user is being suspended or just updating
     document.addEventListener('DOMContentLoaded', function() {
+        // --- Shared function for loading state ---
+        function showLoading(buttonElement, originalText) {
+            buttonElement.disabled = true;
+            buttonElement.innerHTML = '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span> Submitting...';
+            if (!buttonElement.dataset.originalText) {
+                buttonElement.dataset.originalText = originalText;
+            }
+        }
+        // --- END Shared function ---
+
         const suspensionEndDateInput = document.getElementById('suspension_end_date');
-        const suspendUserBtn = document.querySelector('button[name="action"][value="suspend_user"]');
+        const suspendUserBtn = document.getElementById('suspend-user-btn'); // Use new ID
+        const updateSuspensionBtn = document.getElementById('update-suspension-btn'); // Use new ID
+        const suspendUserForm = document.getElementById('suspend-user-form'); // Use new ID for the form
+
+        // Pre-fill suspension end date if it exists
+        const userSuspensionEndDate = "{{ user.suspension_end_date.strftime('%Y-%m-%d') if user.suspension_end_date else '' }}";
+        if (userSuspensionEndDate) {
+            suspensionEndDateInput.value = userSuspensionEndDate;
+        }
+
+        if (suspendUserForm) {
+            suspendUserForm.addEventListener('submit', function(event) {
+                // Determine which button was clicked
+                const submitter = event.submitter;
+                if (submitter) {
+                    showLoading(submitter, submitter.textContent);
+                }
+            });
+        }
         
+        // Original logic for enabling/disabling date input (adjusted for new IDs)
         if (suspendUserBtn && suspensionEndDateInput) {
-            // When 'Suspend User' button is visible, enable the date input.
-            // This script block runs only when modal content is loaded.
             suspensionEndDateInput.disabled = false;
         } else if (!suspendUserBtn && suspensionEndDateInput && !{{ user.is_suspended | tojson }}) {
-             // If user is not suspended and no suspend button (i.e., only update button), date input is disabled by default
              suspensionEndDateInput.disabled = true;
         }
     });

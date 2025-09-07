@@ -32,10 +32,10 @@
       {% set current_role_shift_defs = role_shift_definitions.get(role_name, role_shift_definitions.get('manager')) %}
       {% if current_role_shift_defs %}
           <div class="mb-4">
-              <button class="btn btn-light w-100 text-start" type="button" data-bs-toggle="collapse" data-bs-target="#shiftTimesCollapse" aria-expanded="true" aria-controls="shiftTimesCollapse">
+              <button class="btn btn-light w-100 text-start collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#shiftTimesCollapse" aria-expanded="false" aria-controls="shiftTimesCollapse">
                   <i class="fas fa-clock me-2"></i> Toggle Shift Time Rules for {{ role_label }}s
               </button>
-              <div class="collapse show" id="shiftTimesCollapse">
+              <div class="collapse" id="shiftTimesCollapse">
                   <div class="p-3 border rounded-bottom bg-light">
                       <div class="row row-cols-1 row-cols-md-2 row-cols-lg-3 g-2">
                           {% for day in display_dates %}
@@ -454,40 +454,29 @@ document.addEventListener('DOMContentLoaded', function() {
         customShiftEndTimeInput.setAttribute('required', 'required');
     });
 
-    // --- Collapsible Staff Cards Functionality ---
+    // --- FIX: Collapsible Staff Cards Functionality (Moved from base.html) ---
     const collapseAllBtn = document.getElementById('collapseAllBtn');
     const expandAllBtn = document.getElementById('expandAllBtn');
     
-    if (collapseAllBtn && expandAllBtn) {
+    // Get all card body elements that can be collapsed
+    const staffCardBodies = document.querySelectorAll('.staff-card-body');
+    const staffCardHeaders = document.querySelectorAll('.staff-card-header');
+
+    if (collapseAllBtn && expandAllBtn && staffCardBodies.length > 0) {
+        // Initialize Bootstrap Collapse instances for all card bodies
+        const collapseInstances = Array.from(staffCardBodies).map(body => new bootstrap.Collapse(body, { toggle: false }));
+
         collapseAllBtn.addEventListener('click', function() {
-            const staffCards = document.querySelectorAll('.staff-card-body');
-            staffCards.forEach(card => {
-                bootstrap.Collapse.getInstance(card)?.hide();
-            });
-            
-            const headers = document.querySelectorAll('.staff-card-header');
-            headers.forEach(header => {
-                header.classList.remove('expanded');
-                header.classList.add('collapsed');
-            });
+            collapseInstances.forEach(instance => instance.hide());
         });
         
         expandAllBtn.addEventListener('click', function() {
-            const staffCards = document.querySelectorAll('.staff-card-body');
-            staffCards.forEach(card => {
-                bootstrap.Collapse.getInstance(card)?.show();
-            });
-            
-            const headers = document.querySelectorAll('.staff-card-header');
-            headers.forEach(header => {
-                header.classList.remove('collapsed');
-                header.classList.add('expanded');
-            });
+            collapseInstances.forEach(instance => instance.show());
         });
     }
     
     // Update header classes when collapse events happen
-    const staffCardBodies = document.querySelectorAll('.staff-card-body');
+    // This is already present in your original file, keeping it.
     staffCardBodies.forEach(body => {
         body.addEventListener('show.bs.collapse', function() {
             const header = this.previousElementSibling;
@@ -504,7 +493,16 @@ document.addEventListener('DOMContentLoaded', function() {
                 header.classList.add('collapsed');
             }
         });
+        // Initial state update for headers if any start expanded (e.g., if Bootstrap defaults to show)
+        if (body.classList.contains('show')) {
+            const header = body.previousElementSibling;
+            if (header && header.classList.contains('staff-card-header')) {
+                header.classList.remove('collapsed');
+                header.classList.add('expanded');
+            }
+        }
     });
+    // --- END FIX ---
 });
 </script>
 {% endblock scripts %}

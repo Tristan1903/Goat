@@ -1,5 +1,3 @@
-<!-- START OF FILE products.html -->
-
 {% extends "base.html" %}
 
 {% block title %}Manage Products{% endblock %}
@@ -12,86 +10,193 @@
             <h2 class="card-title mb-2">Manage Products</h2>
             <p class="text-muted mb-4">Add, edit, or delete inventory items.</p>
 
+            {# --- Add New Product Collapsible --- #}
             <div class="p-4 rounded-3 mb-4" style="background-color: #f8f9fa;">
-                <h4 class="mb-3">Add a New Product</h4>
-                <form action="{{ url_for('products') }}" method="POST">
-                    <div class="row g-3 form-row-halved">
-                        <div class="col-md-4">
-                            <label for="name" class="form-label">Product Name</label>
-                            <input type="text" id="name" name="name" class="form-control" required>
-                        </div>
-                        <div class="col-md-4">
-                            <label for="type" class="form-label">Product Type</label>
-                            <input type="text" id="type" name="type" class="form-control" required placeholder="e.g., Beer, Wine, Garnish">
-                        </div>
-                        <div class="col-md-4">
-                            <label for="unit_of_measure" class="form-label">Unit of Measure</label>
-                            <input type="text" id="unit_of_measure" name="unit_of_measure" class="form-control" required placeholder="e.g., Bottles, kg, L">
-                        </div>
-                        {# NEW: Add Product Number input #}
-                        <div class="col-md-4">
-                            <label for="product_number" class="form-label">Product # (Optional)</label>
-                            <input type="text" id="product_number" name="product_number" class="form-control" placeholder="e.g., SKU-12345">
-                        </div>
-                        <div class="col-md-4">
-                            <label for="unit_price" class="form-label">Unit Price (Optional)</label>
-                            <div class="input-group">
-                                <span class="input-group-text">R</span>
-                                <input type="number" id="unit_price" name="unit_price" class="form-control" min="0" step="0.01" placeholder="e.g., 25.50">
+                <div class="d-flex justify-content-between align-items-center mb-3">
+                    <h4 class="mb-0">Add a New Product</h4>
+                    <button class="btn btn-sm btn-outline-secondary" type="button" data-bs-toggle="collapse" data-bs-target="#addProductCollapse" aria-expanded="false" aria-controls="addProductCollapse">
+                        <span class="add-product-toggle-text-show "><i class="fas fa-plus me-1"></i> Add Product</span>
+                        <span class="add-product-toggle-text-hide d-none"><i class="fas fa-minus me-1"></i> Hide Form</span>
+                    </button>
+                </div>
+                <div class="collapse" id="addProductCollapse">
+                    <form action="{{ url_for('products') }}" method="POST">
+                        <div class="row g-3 form-row-halved">
+                            <div class="col-md-4">
+                                <label for="name" class="form-label">Product Name</label>
+                                <input type="text" id="name" name="name" class="form-control" required>
+                            </div>
+                            <div class="col-md-4">
+                                <label for="type" class="form-label">Product Type</label>
+                                <input type="text" id="type" name="type" class="form-control" required placeholder="e.g., Beer, Wine, Garnish">
+                            </div>
+                            <div class="col-md-4">
+                                <label for="unit_of_measure" class="form-label">Unit of Measure</label>
+                                <input type="text" id="unit_of_measure" name="unit_of_measure" class="form-control" required placeholder="e.g., EA, kg, L">
+                            </div>
+                            <div class="col-md-4">
+                                <label for="product_number" class="form-label">Product # (Optional)</label>
+                                <input type="text" id="product_number" name="product_number" class="form-control" placeholder="e.g., SKU-12345">
+                            </div>
+                            <div class="col-md-4">
+                                <label for="unit_price" class="form-label">Unit Price (Optional)</label>
+                                <div class="input-group">
+                                    <span class="input-group-text">R</span>
+                                    <input type="number" id="unit_price" name="unit_price" class="form-control" min="0" step="0.01" placeholder="e.g., 25.50">
+                                </div>
+                            </div>
+                            <div class="col-md-4 d-flex align-items-end">
+                                <button type="submit" class="btn btn-primary w-100">Add Product</button>
                             </div>
                         </div>
-                        <div class="col-md-4 d-flex align-items-end">
-                            <button type="submit" class="btn btn-primary w-100">Add Product</button>
-                        </div>
-                    </div>
-                </form>
+                    </form>
+                </div>
             </div>
 
-            <h4 class="mb-3">Existing Products</h4>
-            {% if products %}
-                <div class="table-responsive">
-                    <table class="table table-hover">
-                        <thead class="table-dark">
-                            <tr>
-                                <th>Product Name</th>
-                                <th>Type</th>
-                                <th>Unit of Measure</th>
-                                {# NEW: Add table header for Product Number #}
-                                <th>Product #</th> 
-                                <th>Unit Price</th>
-                                <th>Actions</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {% for product in products %}
-                            <tr>
-                                <td>{{ product.name }}</td>
-                                <td>{{ product.type }}</td>
-                                <td>{{ product.unit_of_measure }}</td>
-                                {# NEW: Display Product Number #}
-                                <td>{{ product.product_number if product.product_number is not none else 'N/A' }}</td>
-                                <td>R{{ "%.2f"|format(product.unit_price) if product.unit_price is not none else 'N/A' }}</td>
-                                <td>
-                                    {# NEW: Set Stock button #}
-                                    {% if current_user.has_role('manager') or current_user.has_role('general_manager') or current_user.has_role('system_admin') %}
-                                    <button type="button" class="btn btn-sm btn-outline-success me-2 set-stock-btn"
-                                            data-bs-toggle="modal" data-bs-target="#setStockModal"
-                                            data-product-id="{{ product.id }}"
-                                            data-product-name="{{ product.name }}"
-                                            data-product-unit="{{ product.unit_of_measure }}">
-                                        Set Stock
-                                    </button>
-                                    {% endif %}
-                                    <a href="{{ url_for('edit_product', product_id=product.id) }}" class="btn btn-sm btn-outline-secondary me-2">Edit</a>
-                                    <form action="{{ url_for('delete_product', product_id=product.id) }}" method="post" class="d-inline">
-                                        <button type="submit" class="btn btn-sm btn-outline-danger" onclick="return confirm('Are you sure you want to delete this product? This action cannot be undone.')">Delete</button>
-                                    </form>
-                                </td>
-                            </tr>
-                            {% endfor %}
-                        </tbody>
-                    </table>
+
+            <div class="p-4 rounded-3 mb-4" style="background-color: #e9ecef;">
+                <div class="d-flex justify-content-between align-items-center mb-3">
+                    <h4 class="mb-0">View Options</h4>
+                    <button class="btn btn-sm btn-outline-secondary" type="button" data-bs-toggle="collapse" data-bs-target="#viewOptionsCollapse" aria-expanded="false" aria-controls="viewOptionsCollapse">
+                        <span class="toggle-text-show"><i class="fas fa-chevron-down me-1"></i> Show Filters</span>
+                        <span class="toggle-text-hide d-none"><i class="fas fa-chevron-up me-1"></i> Hide Filters</span>
+                    </button>
                 </div>
+
+                <div class="collapse" id="viewOptionsCollapse">
+                    <form id="view-options-form" action="{{ url_for('products') }}" method="GET" class="row g-3">
+                        <div class="col-md-12 mb-3">
+                            <label for="search_query" class="form-label">Search Product Name:</label>
+                            <input type="text" id="search_query" name="search_query" class="form-control" placeholder="e.g., Vodka, Lime Juice" value="{{ current_search_query if current_search_query is not none else '' }}">
+                        </div>
+
+                        <div class="col-md-3">
+                            <label for="type_filter" class="form-label">Filter by Type:</label>
+                            <select class="form-select" id="type_filter" name="type_filter">
+                                <option value="all" {% if current_type_filter == 'all' %}selected{% endif %}>All Types</option>
+                                {% for type in all_product_types %}
+                                    <option value="{{ type }}" {% if current_type_filter == type %}selected{% endif %}>{{ type }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div class="col-md-3">
+                            <label for="group_by" class="form-label">Group By:</label>
+                            <select class="form-select" id="group_by" name="group_by">
+                                <option value="none" {% if current_group_by == 'none' %}selected{% endif %}>No Grouping</option>
+                                <option value="type" {% if current_group_by == 'type' %}selected{% endif %}>Product Type</option>
+                                <option value="location" {% if current_group_by == 'location' %}selected{% endif %}>Location</option>
+                            </select>
+                        </div>
+                        <div class="col-md-3">
+                            <label for="sort_by" class="form-label">Sort By:</label>
+                            <select class="form-select" id="sort_by" name="sort_by">
+                                <option value="name" {% if current_sort_by == 'name' %}selected{% endif %}>Product Name</option>
+                                <option value="type" {% if current_sort_by == 'type' %}selected{% endif %}>Product Type</option>
+                                <option value="unit_of_measure" {% if current_sort_by == 'unit_of_measure' %}selected{% endif %}>Unit of Measure</option>
+                                <option value="unit_price" {% if current_sort_by == 'unit_price' %}selected{% endif %}>Unit Price</option>
+                                <option value="product_number" {% if current_sort_by == 'product_number' %}selected{% endif %}>Product #</option>
+                            </select>
+                        </div>
+                        <div class="col-md-3">
+                            <label for="sort_order" class="form-label">Sort Order:</label>
+                            <select class="form-select" id="sort_order" name="sort_order">
+                                <option value="asc" {% if current_sort_order == 'asc' %}selected{% endif %}>Ascending</option>
+                                <option value="desc" {% if current_sort_order == 'desc' %}selected{% endif %}>Descending</option>
+                            </select>
+                        </div>
+                        <div class="col-12 d-flex justify-content-end gap-2">
+                            <button type="button" id="clear-filters-btn" class="btn btn-outline-secondary">
+                                <i class="fas fa-filter-slash me-2"></i>Clear Filters
+                            </button>
+                            <button type="submit" class="btn btn-primary"><i class="fas fa-filter me-2"></i>Apply Filters</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+
+            {# --- MODIFIED SECTION: Existing Products Heading with inline buttons --- #}
+            <div class="d-flex justify-content-between align-items-center mb-3">
+                <h4 class="mb-0">
+                    Existing Products
+                    <br>
+                    <small class="text-muted">
+                        Viewing:
+                        {% if current_type_filter == 'all' %}
+                            All Products
+                        {% else %}
+                            {{ current_type_filter }} Products
+                        {% endif %}
+                    </small>
+                </h4>
+                <div class="d-flex gap-2"> {# Added a div for horizontal grouping of buttons #}
+                    <a href="{{ url_for('set_all_stock') }}" class="btn btn-success">
+                        <i class="fas fa-cubes me-2"></i>Set Stock
+                    </a>
+                    {# --- NEW BUTTON: Set Price for All Products --- #}
+                    <a href="{{ url_for('set_all_prices') }}" class="btn btn-info text-white">
+                        <i class="fas fa-tags me-2"></i>Set Prices
+                    </a>
+                    {# --- END NEW BUTTON --- #}
+                </div>
+            </div>
+            {# --- END MODIFIED SECTION --- #}
+
+            {% if grouped_products %}
+                {% for group_name, products_in_group in grouped_products.items() %}
+                    <h5 class="mt-4 mb-2">{{ group_name }} ({{ products_in_group|length }} items)</h5>
+                    {% if products_in_group %}
+                        <div class="table-responsive mb-4">
+                            <table class="table table-hover">
+                                <thead class="table-dark">
+                                    <tr>
+                                        <th>Product Name</th>
+                                        {# Conditionally hide Type column #}
+                                        {% if current_group_by != 'type' and current_type_filter == 'all' %}
+                                        <th>Type</th>
+                                        {% endif %}
+                                        <th>Unit of Measure</th>
+                                        <th>Product #</th>
+                                        <th>Unit Price</th>
+                                        <th>Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {% for product in products_in_group %}
+                                    <tr>
+                                        <td>{{ product.name }}</td>
+                                        {# Conditionally hide Type column #}
+                                        {% if current_group_by != 'type' and current_type_filter == 'all' %}
+                                        <td>{{ product.type }}</td>
+                                        {% endif %}
+                                        <td>{{ product.unit_of_measure }}</td>
+                                        <td>{{ product.product_number if product.product_number is not none else 'N/A' }}</td>
+                                        <td>R{{ "%.2f"|format(product.unit_price) if product.unit_price is not none else 'N/A' }}</td>
+                                        <td>
+                                            <div class="d-flex flex-wrap gap-2"> {# Use flex-wrap for better spacing/stacking of multiple buttons #}
+                                                {# --- MODIFIED: Individual "Set Stock" button to link to global page with search --- #}
+                                                <a href="{{ url_for('set_all_stock', search_query=product.name) }}" class="btn btn-sm btn-outline-success">
+                                                    <i class="fas fa-cubes me-1"></i>Stock
+                                                </a>
+                                                {# --- NEW BUTTON: Individual "Set Price" button --- #}
+                                                <a href="{{ url_for('set_all_prices', search_query=product.name) }}" class="btn btn-sm btn-outline-info">
+                                                    <i class="fas fa-tags me-1"></i>Price
+                                                </a>
+                                                {# --- END NEW BUTTON --- #}
+                                                <a href="{{ url_for('edit_product', product_id=product.id) }}" class="btn btn-sm btn-outline-secondary">Edit</a>
+                                                <form action="{{ url_for('delete_product', product_id=product.id) }}" method="post" class="d-inline">
+                                                    <button type="submit" class="btn btn-sm btn-outline-danger" onclick="return confirm('Are you sure you want to delete this product? This action cannot be undone.')">Delete</button>
+                                                </form>
+                                            </div>
+                                        </td>
+                                    </tr>
+                                    {% endfor %}
+                                </tbody>
+                            </table>
+                        </div>
+                    {% else %}
+                        <p class="text-muted">No products in this group.</p>
+                    {% endif %}
+                {% endfor %}
             {% else %}
                 <p class="text-muted">No products found. Please add one using the form above.</p>
             {% endif %}
@@ -100,101 +205,11 @@
     </div>
 </div>
 
-{# NEW: Bootstrap Modal Structure for Set Stock #}
-<div class="modal fade" id="setStockModal" tabindex="-1" aria-labelledby="setStockModalLabel" aria-hidden="true">
-  <div class="modal-dialog modal-dialog-centered">
-    <div class="modal-content">
-      {# Content will be loaded here dynamically #}
-    </div>
-  </div>
-</div>
+{# No modal definitions here as they are replaced by full pages #}
 
 {% block scripts %}
 <script>
 document.addEventListener('DOMContentLoaded', function() {
-    const setStockModal = document.getElementById('setStockModal');
-    if (setStockModal) {
-        setStockModal.addEventListener('show.bs.modal', async function (event) {
-            const button = event.relatedTarget; 
-            const productId = button.dataset.productId;
-            const productName = button.dataset.productName;
-            const productUnit = button.dataset.productUnit;
-
-            if (productId) {
-                const modalContent = setStockModal.querySelector('.modal-content');
-                // Dynamically load content from Flask route
-                try {
-                    const response = await fetch(`/set_product_stock/${productId}`);
-                    if (response.ok) {
-                        modalContent.innerHTML = await response.text();
-                        // Update modal title with product name (already present in partial)
-                        const modalTitle = modalContent.querySelector('#setStockModalLabel');
-                        if (modalTitle) modalTitle.textContent = `Set Stock for ${productName}`;
-                        // Update unit of measure display in the form (already present in partial)
-                        const unitSpan = modalContent.querySelector('#product-unit-display');
-                        if (unitSpan) unitSpan.textContent = productUnit;
-                        
-                        // --- NEW: Attach submit handler to the dynamically loaded form ---
-                        const form = modalContent.querySelector('#set-stock-form'); // Target the form by its ID
-                        if (form) {
-                            form.addEventListener('submit', async function(e) {
-                                e.preventDefault(); // Prevent default form submission
-                                
-                                const formData = new FormData(form);
-                                const formResponse = await fetch(form.action, {
-                                    method: 'POST',
-                                    body: formData,
-                                    headers: {
-                                        'X-Requested-With': 'XMLHttpRequest' // Indicate AJAX request
-                                    }
-                                });
-                                
-                                const result = await formResponse.json(); // Expect JSON response from Flask
-
-                                // Clear existing flash messages (if any were generated by Flask's jsonify)
-                                // This is a workaround as Flask's flash messages are for full page redirects
-                                document.querySelectorAll('.alert').forEach(alert => alert.remove());
-
-                                if (result.status === 'success') {
-                                    flashMessage(result.message, 'success'); // Show success message
-                                    setStockModal.querySelector('.btn-close').click(); // Close the modal
-                                    location.reload(); // Reload the products page to show updated info
-                                } else {
-                                    // If an error, Flask's set_product_stock route renders the modal content again.
-                                    // We need to re-insert the error-containing HTML response into the modal.
-                                    modalContent.innerHTML = await formResponse.text(); // Re-render modal content with errors
-                                    // Flash the error message if result.message exists
-                                    if (result.message) {
-                                         flashMessage(result.message, 'danger');
-                                    } else {
-                                        flashMessage('An unknown error occurred during stock update.', 'danger');
-                                    }
-                                    // Re-attach the submit listener after re-rendering the modal content
-                                    const newForm = modalContent.querySelector('#set-stock-form');
-                                    if (newForm) {
-                                        // Recursively call the setup function or explicitly bind if needed
-                                        // For simplicity, just close and let user retry. A more advanced pattern would re-attach.
-                                        // Let's re-attach a simplified listener here.
-                                         newForm.addEventListener('submit', arguments.callee); // Re-attach this same listener
-                                    }
-                                }
-                            });
-                        }
-
-                    } else {
-                        modalContent.innerHTML = `<div class="modal-header"><h5 class="modal-title">Error</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div><div class="modal-body text-danger">Failed to load stock form. Status: ${response.status}</div>`;
-                    }
-                } catch (error) {
-                    modalContent.innerHTML = `<div class="modal-header"><h5 class="modal-title">Error</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div><div class="modal-body text-danger">An error occurred: ${error.message}</div>`;
-                    console.error("Error loading set product stock modal content:", error);
-                }
-            }
-        });
-        setStockModal.addEventListener('hidden.bs.modal', function () {
-            this.querySelector('.modal-content').innerHTML = ''; // Clear modal content when hidden
-        });
-    }
-
     // Helper for flash messages (re-used from other places, ensure it's here)
     function flashMessage(message, category) {
         const toastContainer = document.querySelector('.toast-container');
@@ -213,6 +228,80 @@ document.addEventListener('DOMContentLoaded', function() {
         newToast.show();
         newToastEl.addEventListener('hidden.bs.toast', () => newToastEl.remove());
     }
+
+    // --- JAVASCRIPT FOR COLLAPSE BEHAVIOR (Existing View Options) ---
+    const viewOptionsCollapseElement = document.getElementById('viewOptionsCollapse');
+    const toggleButton = document.querySelector('[data-bs-target="#viewOptionsCollapse"]');
+    const toggleTextShow = toggleButton.querySelector('.toggle-text-show');
+    const toggleTextHide = toggleButton.querySelector('.toggle-text-hide');
+
+    if (viewOptionsCollapseElement && toggleButton) {
+        viewOptionsCollapseElement.addEventListener('show.bs.collapse', function () {
+            toggleTextShow.classList.add('d-none');
+            toggleTextHide.classList.remove('d-none');
+            toggleButton.setAttribute('aria-expanded', 'true');
+        });
+
+        viewOptionsCollapseElement.addEventListener('hide.bs.collapse', function () {
+            toggleTextShow.classList.remove('d-none');
+            toggleTextHide.classList.add('d-none');
+            toggleButton.setAttribute('aria-expanded', 'false');
+        });
+    }
+
+    const groupBySelect = document.getElementById('group_by');
+    const sortBySelect = document.getElementById('sort_by');
+    const sortOrderSelect = document.getElementById('sort_order');
+    const typeFilterSelect = document.getElementById('type_filter');
+    const search_query_input = document.getElementById('search_query');
+
+    if (groupBySelect) groupBySelect.removeAttribute('onchange');
+    if (sortBySelect) sortBySelect.removeAttribute('onchange');
+    if (sortOrderSelect) sortOrderSelect.removeAttribute('onchange');
+    if (typeFilterSelect) typeFilterSelect.removeAttribute('onchange');
+    // --- END JAVASCRIPT FOR COLLAPSE BEHAVIOR (Existing View Options) ---
+
+
+    // --- NEW JAVASCRIPT FOR "ADD PRODUCT" COLLAPSIBLE ---
+    const addProductCollapseElement = document.getElementById('addProductCollapse');
+    const addProductToggleButton = document.querySelector('[data-bs-target="#addProductCollapse"]');
+    const addProductToggleTextShow = addProductToggleButton.querySelector('.add-product-toggle-text-show');
+    const addProductToggleTextHide = addProductToggleButton.querySelector('.add-product-toggle-text-hide');
+
+    if (addProductCollapseElement && addProductToggleButton) {
+        addProductCollapseElement.addEventListener('show.bs.collapse', function () {
+            addProductToggleTextShow.classList.add('d-none');
+            addProductToggleTextHide.classList.remove('d-none');
+            addProductToggleButton.setAttribute('aria-expanded', 'true');
+        });
+
+        addProductCollapseElement.addEventListener('hide.bs.collapse', function () {
+            addProductToggleTextShow.classList.remove('d-none');
+            addProductToggleTextHide.classList.add('d-none');
+            addProductToggleButton.setAttribute('aria-expanded', 'false');
+        });
+    }
+    // --- END NEW JAVASCRIPT FOR "ADD PRODUCT" COLLAPSIBLE ---
+
+
+    // --- JAVASCRIPT FOR CLEAR FILTERS BUTTON ---
+    const clearFiltersBtn = document.getElementById('clear-filters-btn');
+    const viewOptionsForm = document.getElementById('view-options-form');
+
+    if (clearFiltersBtn && viewOptionsForm) {
+        clearFiltersBtn.addEventListener('click', function() {
+            // Reset filters to defaults
+            groupBySelect.value = 'none';
+            sortBySelect.value = 'product_number';
+            sortOrderSelect.value = 'asc';
+            typeFilterSelect.value = 'all';
+            search_query_input.value = '';
+
+            // Submit the form to apply the cleared filters
+            viewOptionsForm.submit();
+        });
+    }
+    // --- END JAVASCRIPT FOR CLEAR FILTERS BUTTON ---
 });
 </script>
 {% endblock scripts %}

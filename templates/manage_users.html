@@ -16,9 +16,9 @@
             </div>
             <p class="text-muted mb-4">View, edit, and manage user accounts.</p>
 
-            {# NEW: Filter by Role dropdown #}
+            {# NEW: Filter by Role dropdown AND Search Bar #}
             <div class="row mb-3 align-items-center">
-                <div class="col-md-4">
+                <div class="col-md-4 mb-3 mb-md-0">
                     <label for="roleFilter" class="form-label visually-hidden">Filter by Role</label>
                     <select class="form-select" id="roleFilter">
                         <option value="">All Roles</option>
@@ -27,8 +27,16 @@
                         {% endfor %}
                     </select>
                 </div>
-                <div class="col-md-8 text-end">
-                    {# Add any other filters or search bars here if needed in the future #}
+                {# NEW: Search Bar #}
+                <div class="col-md-5 mb-3 mb-md-0">
+                    <label for="userSearch" class="form-label visually-hidden">Search Users</label>
+                    <div class="input-group">
+                        <span class="input-group-text"><i class="fas fa-search"></i></span>
+                        <input type="text" id="userSearch" class="form-control" placeholder="Search by name or username...">
+                    </div>
+                </div>
+                <div class="col-md-3 text-end">
+                    {# Add any other filters or clear buttons here if needed in the future #}
                 </div>
             </div>
 
@@ -36,16 +44,20 @@
                 <table class="table table-hover" id="userTable">
                     <thead class="table-dark">
                         <tr>
-                            <th>Full Name</th>
-                            <th>Username</th>
+                            <th class="sortable" data-sort-by="full_name">Full Name <i class="fas fa-sort float-end"></i></th>
+                            <th class="sortable" data-sort-by="username">Username <i class="fas fa-sort float-end"></i></th>
                             <th class="sortable" data-sort-by="role">Role <i class="fas fa-sort float-end"></i></th> {# Made sortable #}
-                            <th>Status</th> {# NEW HEADER #}
+                            <th class="sortable" data-sort-by="status">Status <i class="fas fa-sort float-end"></i></th> {# NEW HEADER - Made sortable #}
                             <th>Actions</th>
                         </tr>
                     </thead>
                     <tbody>
                         {% for user in users %}
-                        <tr data-roles="{{ user.roles | map(attribute='name') | join(',') }}"> {# Add data-roles attribute for filtering #}
+                        <tr data-roles="{{ user.roles | map(attribute='name') | join(',') }}"
+                            data-full-name="{{ user.full_name | lower }}"
+                            data-username="{{ user.username | lower }}"
+                            data-status-order="{% if user.is_suspended %}2{% else %}1{% endif %}" {# For sorting: Active=1, Suspended=2 #}
+                            class="user-row"> {# Added class for easier selection #}
                             <td class="fw-bold">{{ user.full_name }}</td>
                             <td>{{ user.username }}</td>
                             <td data-sort-value="{{ user.roles | map(attribute='name') | join(',') }}"> {# Add data-sort-value for consistent sorting #}
@@ -156,7 +168,7 @@ document.addEventListener('DOMContentLoaded', function() {
                                 }
                                 
                                 // --- MODIFIED LINE: Use userId from the dataset, not Jinja's 'user.id' ---
-                                const formResponse = await fetch(`{{ url_for('edit_user', user_id=12345) }}`.replace('12345', userId), { // Placeholder 12345
+                                const formResponse = await fetch(`{{ url_for('edit_user', user_id=0).replace('0', '__USER_ID__') }}`.replace('__USER_ID__', userId), { // Placeholder 0
                                     method: 'POST',
                                     body: formData,
                                     headers: {
@@ -175,10 +187,12 @@ document.addEventListener('DOMContentLoaded', function() {
                                     location.reload(); 
                                 } else {
                                     flashMessage(result.message || 'An unknown error occurred.', 'danger');
+                                    // Re-render modal content with errors (if server sent back HTML)
                                     modalContent.innerHTML = await formResponse.text();
+                                    // Re-attach event listener to the newly rendered form
                                     const newForm = modalContent.querySelector('#suspend-user-form');
                                     if (newForm) {
-                                         newForm.addEventListener('submit', arguments.callee);
+                                         newForm.addEventListener('submit', arguments.callee); // Re-bind recursively
                                     }
                                 }
                             });
@@ -256,71 +270,122 @@ document.addEventListener('DOMContentLoaded', function() {
 
     // --- NEW: Filtering and Sorting Logic ---
     const roleFilter = document.getElementById('roleFilter');
+    const userSearch = document.getElementById('userSearch'); // NEW Search Input
     const userTable = document.getElementById('userTable');
     const tableBody = userTable.querySelector('tbody');
-    let currentRowOrder = Array.from(tableBody.querySelectorAll('tr')); // Store initial row order
+    let allUserRows = Array.from(tableBody.querySelectorAll('.user-row')).map(row => { // Changed to .user-row
+        return {
+            element: row,
+            fullName: row.dataset.fullName,
+            username: row.dataset.username,
+            roles: row.dataset.roles ? row.dataset.roles.split(',') : [],
+            statusOrder: parseInt(row.dataset.statusOrder, 10) // For sorting status
+        };
+    });
+    
+    let currentSortColumn = null; // Default to no initial sort
     let sortDirection = 'asc'; // Initial sort direction
 
     function applyFiltersAndSort() {
+        let filteredAndSortedRows = [...allUserRows]; // Start with a copy
+
         const selectedRole = roleFilter.value;
-        let filteredRows = [];
+        const searchTerm = userSearch.value.toLowerCase(); // NEW search term
 
-        // Apply filter
-        currentRowOrder.forEach(row => {
-            const userRoles = row.dataset.roles ? row.dataset.roles.split(',') : [];
-            const isVisible = selectedRole === '' || userRoles.includes(selectedRole);
-            row.style.display = isVisible ? '' : 'none';
-            if (isVisible) {
-                filteredRows.push(row);
-            }
+        // Apply filters
+        filteredAndSortedRows = filteredAndSortedRows.filter(user => {
+            const roleMatch = selectedRole === '' || user.roles.includes(selectedRole);
+            // NEW search match: check full name OR username
+            const searchMatch = user.fullName.includes(searchTerm) || user.username.includes(searchTerm);
+            return roleMatch && searchMatch;
         });
 
-        // Apply sort
-        filteredRows.sort((rowA, rowB) => {
-            const roleA = rowA.querySelector('td[data-sort-value]').dataset.sortValue || '';
-            const roleB = rowB.querySelector('td[data-sort-value]').dataset.sortValue || '';
+        // Apply sorting
+        if (currentSortColumn) {
+            filteredAndSortedRows.sort((userA, userB) => {
+                let valA, valB;
 
-            let comparison = 0;
-            if (roleA > roleB) {
-                comparison = 1;
-            } else if (roleA < roleB) {
-                comparison = -1;
-            }
-            return sortDirection === 'asc' ? comparison : comparison * -1;
-        });
+                if (currentSortColumn === 'full_name') {
+                    valA = userA.fullName;
+                    valB = userB.fullName;
+                } else if (currentSortColumn === 'username') {
+                    valA = userA.username;
+                    valB = userB.username;
+                } else if (currentSortColumn === 'role') {
+                    // Sort by the first role alphabetically, or by a combined string
+                    valA = userA.roles.length > 0 ? userA.roles.sort()[0] : '';
+                    valB = userB.roles.length > 0 ? userB.roles.sort()[0] : '';
+                } else if (currentSortColumn === 'status') { // NEW status sort
+                    valA = userA.statusOrder;
+                    valB = userB.statusOrder;
+                }
+
+                let comparison = 0;
+                if (valA > valB) {
+                    comparison = 1;
+                } else if (valA < valB) {
+                    comparison = -1;
+                }
+                return sortDirection === 'asc' ? comparison : comparison * -1;
+            });
+        }
+
 
         // Re-append sorted and filtered rows to the table
         tableBody.innerHTML = ''; // Clear existing rows
-        filteredRows.forEach(row => tableBody.appendChild(row));
+        if (filteredAndSortedRows.length === 0) {
+            const noResultsRow = document.createElement('tr');
+            noResultsRow.innerHTML = `<td colspan="5" class="text-center text-muted">No users found matching your criteria.</td>`;
+            tableBody.appendChild(noResultsRow);
+        } else {
+            filteredAndSortedRows.forEach(user => tableBody.appendChild(user.element));
+        }
     }
 
     // Event Listener for Role Filter
     if (roleFilter) {
         roleFilter.addEventListener('change', applyFiltersAndSort);
     }
+    // Event Listener for User Search
+    if (userSearch) {
+        userSearch.addEventListener('keyup', applyFiltersAndSort);
+    }
 
-    // Event Listener for Role Sort
-    const roleSortHeader = userTable.querySelector('th[data-sort-by="role"]');
-    if (roleSortHeader) {
-        roleSortHeader.style.cursor = 'pointer'; // Indicate it's clickable
-        roleSortHeader.addEventListener('click', function() {
-            sortDirection = sortDirection === 'asc' ? 'desc' : 'asc';
-            // Update sort icon
-            const sortIcon = this.querySelector('i.fa-sort, i.fa-sort-up, i.fa-sort-down');
-            if (sortIcon) {
-                sortIcon.classList.remove('fa-sort', 'fa-sort-up', 'fa-sort-down');
-                if (sortDirection === 'asc') {
-                    sortIcon.classList.add('fa-sort-up');
-                } else {
-                    sortIcon.classList.add('fa-sort-down');
-                }
+
+    // Event Listener for Sortable Headers
+    document.querySelectorAll('#userTable th.sortable').forEach(header => { // Select sortable headers
+        header.style.cursor = 'pointer'; // Indicate it's clickable
+        header.addEventListener('click', function() {
+            const sortBy = this.dataset.sortBy;
+            if (currentSortColumn === sortBy) {
+                sortDirection = sortDirection === 'asc' ? 'desc' : 'asc';
+            } else {
+                currentSortColumn = sortBy;
+                sortDirection = 'asc'; // Default to ascending when changing column
             }
+            updateSortIcons();
             applyFiltersAndSort();
         });
+    });
+
+    function updateSortIcons() {
+        document.querySelectorAll('#userTable th.sortable i').forEach(icon => {
+            icon.classList.remove('fa-sort-up', 'fa-sort-down');
+            icon.classList.add('fa-sort'); // Reset all to default
+        });
+
+        if (currentSortColumn) {
+            const activeHeader = document.querySelector(`#userTable th.sortable[data-sort-by="${currentSortColumn}"] i`);
+            if (activeHeader) {
+                activeHeader.classList.remove('fa-sort');
+                activeHeader.classList.add(sortDirection === 'asc' ? 'fa-sort-up' : 'fa-sort-down');
+            }
+        }
     }
 
     // Initial application of filters/sorts when the page loads
-    applyFiltersAndSort();
+    updateSortIcons(); // Set initial sort icons
+    applyFiltersAndSort(); // Apply filters and sort on page load
 
 });
 </script>

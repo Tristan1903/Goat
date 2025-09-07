@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+
+{% block title %}Edit Warning{% endblock %}
+
+{% block content %}
+<div class="container mt-4">
+    <div class="row justify-content-center">
+        <div class="col-lg-8">
+            <div class="card shadow-sm">
+                <div class="card-body p-4 p-md-5">
+                    <h2 class="card-title mb-2">Edit Warning</h2>
+                    <p class="text-muted mb-4">Update details for the warning issued to <strong>{{ warning.user.full_name }}</strong>.</p>
+                    <form action="{{ url_for('edit_warning', warning_id=warning.id) }}" method="POST">
+                        
+                        <div class="mb-3">
+                            <label for="warned_user" class="form-label">Staff Member</label>
+                            <select id="warned_user" name="user_id" class="form-select" required>
+                                {% for user in staff_users %}
+                                    <option value="{{ user.id }}" {% if user.id == warning.user_id %}selected{% endif %}>
+                                        {{ user.full_name }} ({{ user.username }})
+                                    </option>
+                                {% endfor %}
+                            </select>
+                        </div>
+
+                        <div class="mb-3">
+                            <label for="issued_by" class="form-label">Issued By</label>
+                            <input type="text" id="issued_by" class="form-control" value="{{ warning.issued_by.full_name }}" readonly>
+                            {# The actual issued_by_id is stored in the Warning object, no need for hidden input here as it's not being changed via form #}
+                        </div>
+
+                        <div class="mb-3">
+                            <label for="date_issued" class="form-label">Date Issued</label>
+                            <input type="date" id="date_issued" name="date_issued" class="form-control" value="{{ warning.date_issued.isoformat() }}" required>
+                        </div>
+
+                        <div class="mb-3">
+                            <label for="reason" class="form-label">Reason for Warning</label>
+                            <textarea id="reason" name="reason" class="form-control" rows="4" required>{{ warning.reason }}</textarea>
+                        </div>
+
+                        <div class="mb-3">
+                            <label for="severity" class="form-label">Severity</label>
+                            <select id="severity" name="severity" class="form-select" required>
+                                <option value="Minor" {% if warning.severity == 'Minor' %}selected{% endif %}>Minor</option>
+                                <option value="Major" {% if warning.severity == 'Major' %}selected{% endif %}>Major</option>
+                                <option value="Critical" {% if warning.severity == 'Critical' %}selected{% endif %}>Critical</option>
+                            </select>
+                        </div>
+
+                        <div class="mb-3">
+                            <label for="notes" class="form-label">Internal Notes (Optional, not visible to staff)</label>
+                            <textarea id="notes" name="notes" class="form-control" rows="3">{{ warning.notes }}</textarea>
+                        </div>
+
+                        <div class="mb-3">
+                            <label for="status" class="form-label">Status</label>
+                            <select id="status" name="status" class="form-select" required>
+                                <option value="Active" {% if warning.status == 'Active' %}selected{% endif %}>Active</option>
+                                <option value="Resolved" {% if warning.status == 'Resolved' %}selected{% endif %}>Resolved</option>
+                                <option value="Expired" {% if warning.status == 'Expired' %}selected{% endif %}>Expired</option>
+                            </select>
+                        </div>
+
+                        {% if warning.status == 'Resolved' %}
+                        <div class="mb-3 alert alert-info">
+                            <p class="mb-1"><strong>Resolution Date:</strong> {{ warning.resolution_date.strftime('%Y-%m-%d') }}</p>
+                            <p class="mb-0"><strong>Resolved By:</strong> {{ warning.resolved_by.full_name }}</p>
+                        </div>
+                        {% endif %}
+                        
+                        <div class="d-grid gap-2 d-md-flex justify-content-md-end mt-4">
+                            <a href="{{ url_for('manage_warnings') }}" class="btn btn-secondary me-md-2">Cancel</a>
+                            <button type="submit" class="btn btn-primary">Update Warning</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

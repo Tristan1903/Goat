@@ -6,40 +6,40 @@
 <div class="container mt-4">
     <div class="card shadow-sm">
         <div class="card-body p-4 p-md-5">
-            <h2 class="card-title mb-2">Submit Shift Availability</h2>
-            <p class="text-muted mb-4">Select the shifts you are available to work for the upcoming week ({{ week_dates[0].strftime('%b %d') }} - {{ week_dates[-1].strftime('%b %d') }}).</p>
-            
-            {# NEW: Submission Window Status Display #}
-            {% if is_submission_window_open %}
-                <div class="alert alert-success" role="alert">
-                    <i class="fas fa-clock me-2"></i>Submission window is **OPEN** until {{ submission_window_end|to_local_time('%A, %b %d at %I:%M %p') }} (your local time).
-                    {% if time_until_window_closes %}<span class="d-block">Time remaining: <span id="countdown-timer">{{ time_until_window_closes }}</span></span>{% endif %}
-                </div>
-            {% else %}
-                <div class="alert alert-warning" role="alert">
-                    <i class="fas fa-lock me-2"></i>Submission window is **CLOSED**. It opens on {{ submission_window_start|to_local_time('%A, %b %d at %I:%M %p') }} (your local time).
-                    {% if time_until_window_opens %}<span class="d-block">Opens in: <span id="countdown-timer">{{ time_until_window_opens }}</span></span>{% endif %}
-                </div>
-            {% endif %}
-            {# END NEW #}
+            <h2 class="card-title mb-4">Submit Shift Availability</h2>
+                <p class="mb-3">Select the shifts you are available to work for the week starting <strong>{{ week_dates[0].strftime('%A, %b %d') }}</strong>.</p>
+                <p class="alert alert-info">
+                    The submission window is for the week starting {{ week_dates[0].strftime('%A, %b %d') }}.
+                    The schedule for this week will be published by your managers after the window closes.
+                </p>
 
-            <form method="POST">
-                <div class="table-responsive-lg">
+                {# Timer Display #}
+                <div id="availabilityTimer" class="alert alert-{% if is_submission_window_open %}success{% else %}warning{% endif %} text-center fs-5 mb-4"
+                     data-submission-start="{{ submission_window_start }}"
+                     data-submission-end="{{ submission_window_end }}">
+                    <!-- Timer will be displayed here by JavaScript -->
+                    Loading timer...
+                </div>
+
+                <form action="{{ url_for('submit_shifts') }}" method="POST">
                     <div class="table-responsive">
                         <table class="table table-bordered text-center">
                             <thead class="table-dark">
                                 <tr>
-                                    <th style="width: 20%;">Shift Type</th>
-                                    {% for day in week_dates %}
-                                        <th>{{ day.strftime('%a') }}<br><small>{{ day.strftime('%b %d') }}</small></th>
+                                    <th>Shift Type</th>
+                                    {% for day in week_dates if day.weekday() != 0 %}
+                                        <th {% if day == today %}class="bg-info text-white"{% endif %}>
+                                            {{ day.strftime('%a, %b %d') }}
+                                        </th>
                                     {% endfor %}
                                 </tr>
                             </thead>
                             <tbody>
-                                {% for shift_type in shift_types %} {# This now refers to ['Day', 'Night'] #}
-                                <tr>
+                                {% for shift_type in shift_types %}
+                                    <tr>
                                     <td class="fw-bold align-middle">{{ shift_type }}</td>
-                                    {% for day in week_dates %}
+                                    {# Filter out Monday (weekday() == 0) #}
+                                    {% for day in week_dates if day.weekday() != 0 %}
                                         {% set checkbox_value = day.isoformat() + '_' + shift_type %}
                                         <td>
                                             <div class="form-check d-flex justify-content-center align-items-center h-100">
@@ -55,67 +55,94 @@
                             </tbody>
                         </table>
                     </div>
-                </div>
-                <div class="d-grid mt-4">
-                    <button type="submit" class="btn btn-primary btn-lg" {% if not is_submission_window_open %}disabled{% endif %}>Submit Availability</button>
-                </div>
-            </form>
+                    <button type="submit" class="btn btn-primary mt-3" {% if not is_submission_window_open %}disabled{% endif %}>
+                        Submit Availability
+                    </button>
+                </form>
         </div>
     </div>
 </div>
 
 {% block scripts %}
 <script>
-document.addEventListener('DOMContentLoaded', function() {
-    const countdownSpan = document.getElementById('countdown-timer');
-    const submissionWindowEndRaw = "{{ submission_window_end | tojson | safe }}"; 
-    const submissionWindowStartRaw = "{{ submission_window_start | tojson | safe }}";
-    const isWindowOpen = {{ is_submission_window_open | tojson | safe }};
+    document.addEventListener('DOMContentLoaded', function() {
+        const timerElement = document.getElementById('availabilityTimer');
+        const submitButton = document.querySelector('button[type="submit"]');
+        const checkboxes = document.querySelectorAll('.form-check-input[name="shifts"]');
 
-    function updateCountdown() {
-        const now = new Date();
-        let targetTime;
-        let messagePrefix;
-
-        if (isWindowOpen) {
-            targetTime = new Date(JSON.parse(submissionWindowEndRaw));
-            messagePrefix = "Time remaining: ";
-        } else {
-            targetTime = new Date(JSON.parse(submissionWindowStartRaw));
-            messagePrefix = "Opens in: ";
-        }
-
-        const diff = targetTime.getTime() - now.getTime();
-
-        if (diff <= 0) {
-            if (countdownSpan) {
-                countdownSpan.textContent = "Window now " + (isWindowOpen ? "closed." : "open.");
-            }
-            location.reload();
+        if (!timerElement || !submitButton || checkboxes.length === 0) {
+            console.error("Required elements for timer/submission not found.");
             return;
         }
 
-        const days = Math.floor(diff / (1000 * 60 * 60 * 24));
-        const hours = Math.floor((diff % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
-        const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
-        const seconds = Math.floor((diff % (1000 * 60)) / 1000);
+        const submissionStartISO = timerElement.dataset.submissionStart;
+        const submissionEndISO = timerElement.dataset.submissionEnd;
 
-        let countdownText = "";
-        if (days > 0) countdownText += `${days}d `;
-        if (hours > 0 || days > 0) countdownText += `${hours}h `;
-        if (minutes > 0 || hours > 0 || days > 0) countdownText += `${minutes}m `;
-        countdownText += `${seconds}s`;
+        // Convert UTC ISO strings to Date objects.
+        // It's crucial to treat these as UTC, or convert to local explicitly if that's the desired display.
+        // For consistent countdown, keeping it in UTC and just displaying differences is safest.
+        const submissionStart = new Date(submissionStartISO + 'Z'); // Append 'Z' to ensure UTC interpretation
+        const submissionEnd = new Date(submissionEndISO + 'Z'); // Append 'Z' to ensure UTC interpretation
 
-        if (countdownSpan) {
-            countdownSpan.textContent = countdownText;
+        let timerInterval = null;
+
+        function updateCountdown() {
+            const now = new Date();
+            let timeDiff = 0;
+            let message = "";
+            let timerRunning = true;
+            let enableForm = false;
+
+            if (now < submissionStart) {
+                // Window opens in...
+                timeDiff = submissionStart.getTime() - now.getTime();
+                message = "Submission window opens in: ";
+                timerElement.classList.remove('alert-success');
+                timerElement.classList.add('alert-warning');
+            } else if (now >= submissionStart && now <= submissionEnd) {
+                // Window closes in...
+                timeDiff = submissionEnd.getTime() - now.getTime();
+                message = "Submission window closes in: ";
+                enableForm = true;
+                timerElement.classList.remove('alert-warning');
+                timerElement.classList.add('alert-success');
+            } else {
+                // Window is closed
+                message = "Submission window is closed.";
+                timerRunning = false;
+                timerElement.classList.remove('alert-success');
+                timerElement.classList.add('alert-danger'); // Use danger for closed
+            }
+
+            if (timerRunning) {
+                const totalSeconds = Math.floor(timeDiff / 1000);
+                const days = Math.floor(totalSeconds / (3600 * 24));
+                const hours = Math.floor((totalSeconds % (3600 * 24)) / 3600);
+                const minutes = Math.floor((totalSeconds % 3600) / 60);
+                const seconds = totalSeconds % 60;
+
+                let timeString = "";
+                if (days > 0) {
+                    timeString += `${days}d `;
+                }
+                timeString += `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+                timerElement.innerHTML = `${message} <strong>${timeString}</strong>`;
+            } else {
+                timerElement.innerHTML = message;
+                clearInterval(timerInterval); // Stop the timer if window is closed
+            }
+
+            // Enable/disable form elements
+            submitButton.disabled = !enableForm;
+            checkboxes.forEach(cb => cb.disabled = !enableForm);
         }
-    }
 
-    if (countdownSpan) {
+        // Initial call
         updateCountdown();
-        setInterval(updateCountdown, 1000);
-    }
-});
+
+        // Update every second
+        timerInterval = setInterval(updateCountdown, 1000);
+    });
 </script>
 {% endblock scripts %}
 {% endblock %}

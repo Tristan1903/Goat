@@ -28,72 +28,29 @@
                 Your account is suspended indefinitely.
             {% endif %}
             {% if current_user.suspension_document_path %}
-                <br><a href="{{ url_for('static', filename='uploads/' + current_user.suspension_document_path) }}" target="_blank" class="alert-link">View Suspension Document</a>
+                <br><a href="{{ current_user.suspension_document_path }}" target="_blank" class="alert-link">View Suspension Document</a>
             {% endif %}
         </div>
     </div>
 {% endif %}
 
 <div class="row g-4">
-    {# NEW: Open Shifts for Volunteering (for staff roles) (unchanged) #}
+    {# NEW: Open Shifts for Volunteering (for staff roles) #}
     {% if current_user.has_role('bartender') or current_user.has_role('waiter') or current_user.has_role('skullers') %}
-        {% if open_shifts_for_volunteering and not current_user.is_suspended %}
-        <div class="col-12">
-            <div class="card shadow-sm border-info">
-                <div class="card-header bg-info text-white"><i class="fas fa-hand-holding-medical me-2"></i>Open Shifts for Volunteering!</div>
-                <div class="list-group list-group-flush">
-                    {% for v_shift in open_shifts_for_volunteering %}
-                    <form action="{{ url_for('volunteer_for_shift') }}" method="post" class="list-group-item d-flex justify-content-between align-items-center">
-                        <input type="hidden" name="volunteered_shift_id" value="{{ v_shift.id }}">
-                        <div>
-                            <i class="fas fa-calendar-alt me-2"></i>
-                            <strong>{{ v_shift.schedule.assigned_shift }}</strong> on {{ v_shift.schedule.shift_date.strftime('%a, %b %d') }}
-                            <small class="text-muted">(Originally {{ v_shift.requester.full_name }})</small>
-                            {% if v_shift.relinquish_reason %}
-                                <div class="small text-muted mt-1 ms-4">Reason: {{ v_shift.relinquish_reason }}</div>
-                            {% endif %}
-                        </div>
-                        <button type="submit" class="btn btn-sm btn-outline-info">Volunteer</button>
-                    </form>
-                    {% endfor %}
-                </div>
-            </div>
+        <div class="col-12" id="openShiftsForVolunteeringContainer">
+            {# Content will be loaded by JavaScript #}
+            <p class="text-center text-muted">Loading open shifts...</p>
         </div>
-        {% elif not current_user.is_suspended %}
-            <div class="col-12">
-                <div class="card shadow-sm border-secondary">
-                    <div class="card-header bg-secondary text-white"><i class="fas fa-hand-holding-medical me-2"></i>Open Shifts for Volunteering</div>
-                    <div class="card-body">
-                        <p class="card-text text-center text-white-50">No shifts currently open for volunteering that match your role and availability.</p>
-                    </div>
-                </div>
-            </div>
-        {% endif %}
     {% endif %}
 
     {# SYSTEM ADMIN VIEW #}
     {% if current_user.has_role('system_admin') %}
-        <!-- Password Reset Alerts -->
-        {% if password_reset_requests %}
-        <div class="col-12">
-            <div class="card shadow-sm border-danger">
-                <div class="card-header bg-danger text-white"><i class="fas fa-engine-warning me-2"></i>Action Required: Password Reset Requests</div>
-                <div class="list-group list-group-flush">
-                    {% for user in password_reset_requests %}
-                    <div class="list-group-item d-flex justify-content-between align-items-center">
-                        <div>
-                            <i class="fas fa-user-shield me-2"></i>
-                            User <strong>{{ user.full_name }}</strong> ({{ user.username }}) has requested a password reset.
-                        </div>
-                        <a href="{{ url_for('edit_user', user_id=user.id) }}" class="btn btn-sm btn-outline-danger">Reset Password</a>
-                    </div>
-                    {% endfor %}
-                </div>
-            </div>
+        <div class="col-12" id="passwordResetRequestsContainer">
+            {# Content will be loaded by JavaScript #}
+            <p class="text-center text-muted">Checking for password reset requests...</p>
         </div>
-        {% endif %}
 
-        <div class="col-lg-7"> {# Adjusted column size for adding announcement/variance next to it #}
+        <div class="col-lg-7">
             <div class="card shadow-sm h-100">
                 <div class="card-header card-header-custom d-flex justify-content-between align-items-center">
                     <span><i class="fas fa-history me-2"></i>Recent Activity Log</span>
@@ -103,70 +60,23 @@
                         </button>
                     </form>
                 </div>
-                <div class="card-body" style="overflow-y: auto; max-height: 400px;">
-                    {% if activity_logs %}
-                        <ul class="list-group list-group-flush">
-                            {% for log in activity_logs %}
-                            <li class="list-group-item">
-                                <p class="mb-0"><strong>{{ log.user.full_name }}</strong> ({{ log.user.username }}) {{ log.action }}</p>
-                                <small class="text-muted">{{ log.timestamp | to_local_time }}</small>
-                            </li>
-                            {% endfor %}
-                        </ul>
-                    {% else %}
-                        <p class="text-muted">No recent activity recorded.</p>
-                    {% endif %}
+                <div class="card-body" style="overflow-y: auto; max-height: 400px;" id="activityLogContainer">
+                    {# Content will be loaded by JavaScript #}
+                    <p class="text-muted">Loading activity log...</p>
                 </div>
             </div>
         </div>
-        <div class="col-lg-5"> {# New column for announcements/variance for admin #}
-            <div class="card shadow-sm mb-4" id="latest-announcement-card">
-                <div class="card-header card-header-custom d-flex justify-content-between align-items-center">
-                    <span><i class="fas fa-bullhorn me-2"></i>Latest Announcement</span>
-                    <button type="button" class="btn-close btn-close-white" id="dismiss-announcement-btn" aria-label="Dismiss"></button>
-                </div>
-                <div class="card-body">
-                    {% if latest_announcement %}
-                        <h5 class="card-title">{{ latest_announcement.title }}</h5>
-                        <p class="card-text">{{ latest_announcement.message }}</p>
-                        {% if latest_announcement.action_link %}
-                            <a href="{{ latest_announcement.action_link }}" class="btn btn-sm btn-outline-primary mt-2">
-                                <i class="fas fa-link me-1"></i>View Action
-                            </a>
-                        {% endif %}
-                        <a href="{{ url_for('announcements') }}" class="btn btn-outline-dark mt-2">View All</a>
-                    {% else %}
-                        <p class="card-text">No new announcements.</p>
-                    {% endif %}
-                </div>
+        <div class="col-lg-5">
+            <div class="card shadow-sm mb-4" id="latestAnnouncementContainer">
+                {# Content will be loaded by JavaScript #}
+                <p class="text-center text-muted">Loading latest announcement...</p>
             </div>
-            <div class="card shadow-sm">
-                <div class="card-header card-header-custom"><i class="fas fa-exclamation-triangle me-2"></i>Today's Variance Alerts</div>
-                <div class="card-body">
-                    {% if bod_submitted and variance_alerts is not none %}
-                        {% if variance_alerts %}
-                            <ul class="list-group list-group-flush">
-                                {% for alert in variance_alerts %}
-                                <li class="list-group-item d-flex justify-content-between align-items-center">
-                                    {{ alert.name }}
-                                    {% if alert.variance > 0 %}<span class="badge bg-success rounded-pill">+{{ alert.variance }}</span>
-                                    {% else %}<span class="badge bg-danger rounded-pill">{{ alert.variance }}</span>{% endif %}
-                                </li>
-                                {% endfor %}
-                            </ul>
-                            <div class="d-grid mt-3">
-                                <a href="{{ url_for('variance') }}" class="btn btn-sm btn-outline-dark">View Full Report</a>
-                            </div>
-                        {% else %}
-                            <p class="card-text text-success"><i class="fas fa-check-circle me-2"></i>No variances detected today.</p>
-                        {% endif %}
-                    {% else %}
-                        <p class="card-text text-muted">Complete daily counts to see variance alerts.</p>
-                    {% endif %}
-                </div>
+            <div class="card shadow-sm" id="varianceAlertsContainer">
+                {# Content will be loaded by JavaScript #}
+                <p class="text-center text-muted">Loading variance alerts...</p>
             </div>
         </div>
-        <div class="col-12 mt-4"> {# Admin Quick Links below activity/announcements #}
+        <div class="col-12 mt-4">
             <div class="card shadow-sm h-100">
                 <div class="card-header card-header-custom"><i class="fas fa-shield-alt me-2"></i>Admin Quick Links</div>
                 <div class="card-body d-grid gap-3">
@@ -183,126 +93,33 @@
         <div class="col-lg-7">
             <div class="card shadow-sm h-100">
                 <div class="card-header card-header-custom"><i class="fas fa-tasks me-2"></i>Daily Operations</div>
-                <div class="card-body d-flex flex-column">
-                    <p class="card-text">Review and manage today's inventory counts.</p>
-                    <div class="d-grid gap-2 mt-auto">
-                        {% for item in location_statuses %}
-                            {% set loc = item.location_obj %}
-                            {% set status = item.status %}
-                            {% set s_class = 'status-not-started' if status == 'not_started' else 'status-counted' if status == 'counted' else 'status-corrected' %}
-                            {% set s_icon = 'fas fa-list-ol' if status == 'not_started' else 'fas fa-check' if status == 'counted' else 'fas fa-pencil-alt' %}
-                            {% set s_text = 'Start Count' if status == 'not_started' else 'Make Corrections' if status == 'counted' else 'Review Corrected' %}
-                            {% if not bod_submitted %}
-                                <span class="d-grid" data-bs-toggle="tooltip" data-bs-placement="top" title="Please submit 'Beginning of Day' counts first.">
-                                    <a href="#" class="btn status-btn {{ s_class }} disabled" tabindex="-1" aria-disabled="true">
-                                        <i class="{{ s_icon }} me-2"></i><strong>{{ loc.name }}:</strong> {{ s_text }}
-                                    </a>
-                                </span>
-                            {% else %}
-                                <a href="{{ url_for('submit_count', location_slug=loc.name|replace(' ', '_')|lower) }}" class="btn status-btn {{ s_class }}">
-                                    <i class="{{ s_icon }} me-2"></i><strong>{{ loc.name }}:</strong> {{ s_text }}
-                                </a>
-                            {% endif %}
-                        {% endfor %}
-                    </div>
+                <div class="card-body d-flex flex-column" id="locationStatusesContainer">
+                    {# Content will be loaded by JavaScript #}
+                    <p class="text-muted">Loading daily operations tasks...</p>
                 </div>
             </div>
         </div>
         <div class="col-lg-5">
-            <div class="card shadow-sm mb-4" id="latest-announcement-card">
-                <div class="card-header card-header-custom d-flex justify-content-between align-items-center">
-                    <span><i class="fas fa-bullhorn me-2"></i>Latest Announcement</span>
-                    <button type="button" class="btn-close btn-close-white" id="dismiss-announcement-btn" aria-label="Dismiss"></button>
-                </div>
-                <div class="card-body">
-                    {% if latest_announcement %}
-                        <h5 class="card-title">{{ latest_announcement.title }}</h5>
-                        <p class="card-text">{{ latest_announcement.message }}</p>
-                        {% if latest_announcement.action_link %}
-                            <a href="{{ latest_announcement.action_link }}" class="btn btn-sm btn-outline-primary mt-2">
-                                <i class="fas fa-link me-1"></i>View Action
-                            </a>
-                        {% endif %}
-                        <a href="{{ url_for('announcements') }}" class="btn btn-outline-dark mt-2">View All</a>
-                    {% else %}
-                        <p class="card-text">No new announcements.</p>
-                    {% endif %}
-                </div>
+            <div class="card shadow-sm mb-4" id="latestAnnouncementContainer">
+                {# Content will be loaded by JavaScript #}
+                <p class="text-center text-muted">Loading latest announcement...</p>
             </div>
-            <div class="card shadow-sm">
-                <div class="card-header card-header-custom"><i class="fas fa-exclamation-triangle me-2"></i>Today's Variance Alerts</div>
-                <div class="card-body">
-                    {% if bod_submitted and variance_alerts is not none %}
-                        {% if variance_alerts %}
-                            <ul class="list-group list-group-flush">
-                                {% for alert in variance_alerts %}
-                                <li class="list-group-item d-flex justify-content-between align-items-center">
-                                    {{ alert.name }}
-                                    {% if alert.variance > 0 %}<span class="badge bg-success rounded-pill">+{{ alert.variance }}</span>
-                                    {% else %}<span class="badge bg-danger rounded-pill">{{ alert.variance }}</span>{% endif %}
-                                </li>
-                                {% endfor %}
-                            </ul>
-                            <div class="d-grid mt-3">
-                                <a href="{{ url_for('variance') }}" class="btn btn-sm btn-outline-dark">View Full Report</a>
-                            </div>
-                        {% else %}
-                            <p class="card-text text-success"><i class="fas fa-check-circle me-2"></i>No variances detected today.</p>
-                        {% endif %}
-                    {% else %}
-                        <p class="card-text text-muted">Complete daily counts to see variance alerts.</p>
-                    {% endif %}
-                </div>
+            <div class="card shadow-sm" id="varianceAlertsContainer">
+                {# Content will be loaded by JavaScript #}
+                <p class="text-center text-muted">Loading variance alerts...</p>
             </div>
         </div>
 
-    {# BUSINESS OWNER VIEW (New Block) #}
+    {# BUSINESS OWNER VIEW #}
     {% elif current_user.has_role('owners') %}
         <div class="col-lg-12">
-            <div class="card shadow-sm mb-4" id="latest-announcement-card">
-                <div class="card-header card-header-custom d-flex justify-content-between align-items-center">
-                    <span><i class="fas fa-bullhorn me-2"></i>Latest Announcement</span>
-                    <button type="button" class="btn-close btn-close-white" id="dismiss-announcement-btn" aria-label="Dismiss"></button>
-                </div>
-                <div class="card-body">
-                    {% if latest_announcement %}
-                        <h5 class="card-title">{{ latest_announcement.title }}</h5>
-                        <p class="card-text">{{ latest_announcement.message }}</p>
-                        {% if latest_announcement.action_link %}
-                            <a href="{{ latest_announcement.action_link }}" class="btn btn-sm btn-outline-primary mt-2">
-                                <i class="fas fa-link me-1"></i>View Action
-                            </a>
-                        {% endif %}
-                        <a href="{{ url_for('announcements') }}" class="btn btn-outline-dark mt-2">View All</a>
-                    {% else %}
-                        <p class="card-text">No new announcements.</p>
-                    {% endif %}
-                </div>
+            <div class="card shadow-sm mb-4" id="latestAnnouncementContainer">
+                {# Content will be loaded by JavaScript #}
+                <p class="text-center text-muted">Loading latest announcement...</p>
             </div>
-            <div class="card shadow-sm">
-                <div class="card-header card-header-custom"><i class="fas fa-exclamation-triangle me-2"></i>Today's Variance Alerts</div>
-                <div class="card-body">
-                    {% if bod_submitted and variance_alerts is not none %}
-                        {% if variance_alerts %}
-                            <ul class="list-group list-group-flush">
-                                {% for alert in variance_alerts %}
-                                <li class="list-group-item d-flex justify-content-between align-items-center">
-                                    {{ alert.name }}
-                                    {% if alert.variance > 0 %}<span class="badge bg-success rounded-pill">+{{ alert.variance }}</span>
-                                    {% else %}<span class="badge bg-danger rounded-pill">{{ alert.variance }}</span>{% endif %}
-                                </li>
-                                {% endfor %}
-                            </ul>
-                            <div class="d-grid mt-3">
-                                <a href="{{ url_for('variance') }}" class="btn btn-sm btn-outline-dark">View Full Report</a>
-                            </div>
-                        {% else %}
-                            <p class="card-text text-success"><i class="fas fa-check-circle me-2"></i>No variances detected today.</p>
-                        {% endif %}
-                    {% else %}
-                        <p class="card-text text-muted">Complete daily counts to see variance alerts.</p>
-                    {% endif %}
-                </div>
+            <div class="card shadow-sm" id="varianceAlertsContainer">
+                {# Content will be loaded by JavaScript #}
+                <p class="text-center text-muted">Loading variance alerts...</p>
             </div>
         </div>
 
@@ -311,52 +128,400 @@
         <div class="col-lg-7">
             <div class="card shadow-sm h-100">
                 <div class="card-header card-header-custom"><i class="fas fa-clipboard-check me-2"></i>Your Daily Tasks</div>
-                <div class="card-body d-flex flex-column">
-                    <p class="card-text">Complete your inventory counts for each location.</p>
-                    <div class="d-grid gap-2 mt-auto">
-                        {% for item in location_statuses %}
-                            {% set loc = item.location_obj %}
-                            {% set status = item.status %}
-                            {% set s_class = 'status-not-started' if status == 'not_started' else 'status-counted' if status == 'counted' else 'status-corrected' %}
-                            {% set s_icon = 'fas fa-list-ol' if status == 'not_started' else 'fas fa-check' if status == 'counted' else 'fas fa-pencil-alt' %}
-                            {% set s_text = 'Start Count' if status == 'not_started' else 'Make Corrections' if status == 'counted' else 'Review Corrected' %}
-                            {% if not bod_submitted %}
-                                <span class="d-grid" data-bs-toggle="tooltip" data-bs-placement="top" title="A manager must submit 'Beginning of Day' counts first.">
-                                    <a href="#" class="btn status-btn {{ s_class }} disabled" tabindex="-1" aria-disabled="true">
-                                        <i class="{{ s_icon }} me-2"></i><strong>{{ loc.name }}:</strong> {{ s_text }}
-                                    </a>
-                                </span>
-                            {% else %}
-                                <a href="{{ url_for('submit_count', location_slug=loc.name|replace(' ', '_')|lower) }}" class="btn status-btn {{ s_class }}">
-                                    <i class="{{ s_icon }} me-2"></i><strong>{{ loc.name }}:</strong> {{ s_text }}
-                                </a>
-                            {% endif %}
-                        {% endfor %}
-                    </div>
+                <div class="card-body d-flex flex-column" id="locationStatusesContainer">
+                    {# Content will be loaded by JavaScript #}
+                    <p class="text-muted">Loading your daily tasks...</p>
                 </div>
             </div>
         </div>
         <div class="col-lg-5">
-            <div class="card shadow-sm h-100">
-                <div class="card-header card-header-custom"><i class="fas fa-bullhorn me-2"></i>Latest Announcement</div>
-                <div class="card-body">
-                    {% if latest_announcement %}
-                        <h5 class="card-title">{{ latest_announcement.title }}</h5>
-                        <p class="card-text">{{ latest_announcement.message }}</p>
-                        {# NEW: Action link button for announcement #}
-                        {% if latest_announcement.action_link %}
-                            <a href="{{ latest_announcement.action_link }}" class="btn btn-sm btn-outline-primary mt-2">
-                                <i class="fas fa-calendar-alt me-1"></i>View Schedule
-                            </a>
-                        {% endif %}
-                        <a href="{{ url_for('announcements') }}" class="btn btn-outline-dark mt-2">View All</a>
-                    {% else %}
-                        <p class="card-text">No new announcements.</p>
-                    {% endif %}
-                </div>
+            <div class="card shadow-sm h-100" id="latestAnnouncementContainer">
+                {# Content will be loaded by JavaScript #}
+                <p class="text-center text-muted">Loading latest announcement...</p>
             </div>
         </div>
     {% endif %}
 </div>
+
+<script>
+    // Helper function to format UTC ISO string to local time
+    function formatUTCToLocal(isoString) {
+        if (!isoString) return "N/A";
+        try {
+            const utcDate = new Date(isoString + 'Z'); // Append 'Z' to treat as UTC
+            // Assuming your local time is UTC+2, adjust as needed if different in production
+            const localDate = new Date(utcDate.getTime() + (2 * 60 * 60 * 1000));
+            return localDate.toLocaleString('en-US', {
+                year: 'numeric',
+                month: '2-digit',
+                day: '2-digit',
+                hour: '2-digit',
+                minute: '2-digit',
+                second: '2-digit',
+                hour12: false
+            }) + ' Local';
+        } catch (e) {
+            console.error('Error formatting date:', e);
+            return isoString;
+        }
+    }
+
+
+    // ==========================================================
+    // JS Functions for each dynamic section
+    // ==========================================================
+
+    function fetchAndRenderOpenShifts() {
+        const container = document.getElementById('openShiftsForVolunteeringContainer');
+        if (!container) return; // Exit if container not present for current role
+
+        fetch('{{ url_for("api_dashboard_open_shifts") }}')
+            .then(response => {
+                if (!response.ok) {
+                    if (response.status === 403) {
+                        // User likely lost role or became suspended, stop polling this section
+                        console.warn('Access denied to open shifts API. Stopping polling.');
+                        container.innerHTML = `<div class="card shadow-sm border-secondary"><div class="card-header bg-secondary text-white"><i class="fas fa-hand-holding-medical me-2"></i>Open Shifts for Volunteering</div><div class="card-body"><p class="card-text text-center text-white-50">Access denied to open shifts data.</p></div></div>`;
+                        return Promise.reject('Access Denied');
+                    }
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                return response.json();
+            })
+            .then(shifts => {
+                let html = `<div class="card shadow-sm border-info"><div class="card-header bg-info text-white"><i class="fas fa-hand-holding-medical me-2"></i>Open Shifts for Volunteering!</div><div class="list-group list-group-flush">`;
+                if (shifts.length === 0) {
+                    html = `<div class="card shadow-sm border-secondary"><div class="card-header bg-secondary text-white"><i class="fas fa-hand-holding-medical me-2"></i>Open Shifts for Volunteering</div><div class="card-body"><p class="card-text text-center text-white-50">No shifts currently open for volunteering that match your role and availability.</p></div></div>`;
+                } else {
+                    shifts.forEach(shift => {
+                        let reasonHtml = shift.relinquish_reason ? `<div class="small text-muted mt-1 ms-4">Reason: ${shift.relinquish_reason}</div>` : '';
+                        html += `
+                            <form action="{{ url_for('volunteer_for_shift') }}" method="post" class="list-group-item d-flex justify-content-between align-items-center">
+                                <input type="hidden" name="volunteered_shift_id" value="${shift.id}">
+                                <div>
+                                    <i class="fas fa-calendar-alt me-2"></i>
+                                    <strong>${shift.assigned_shift}</strong> on ${shift.shift_date}
+                                    <small class="text-muted">(Originally ${shift.requester_full_name})</small>
+                                    ${reasonHtml}
+                                </div>
+                                <button type="submit" class="btn btn-sm btn-outline-info">Volunteer</button>
+                            </form>
+                        `;
+                    });
+                }
+                html += `</div></div>`;
+                container.innerHTML = html;
+            })
+            .catch(error => console.error('Error fetching open shifts:', error));
+    }
+
+
+    function fetchAndRenderPasswordResetRequests() {
+        const container = document.getElementById('passwordResetRequestsContainer');
+        if (!container) return;
+
+        fetch('{{ url_for("api_dashboard_admin_alerts") }}')
+            .then(response => {
+                if (!response.ok) {
+                    if (response.status === 403) {
+                        console.warn('Access denied to admin alerts API. Stopping polling.');
+                        container.innerHTML = ''; // Clear if access denied
+                        return Promise.reject('Access Denied');
+                    }
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                return response.json();
+            })
+            .then(requests => {
+                let html = '';
+                if (requests.length > 0) {
+                    html = `
+                        <div class="card shadow-sm border-danger">
+                            <div class="card-header bg-danger text-white"><i class="fas fa-engine-warning me-2"></i>Action Required: Password Reset Requests</div>
+                            <div class="list-group list-group-flush">
+                    `;
+                    requests.forEach(user => {
+                        html += `
+                                <div class="list-group-item d-flex justify-content-between align-items-center">
+                                    <div>
+                                        <i class="fas fa-user-shield me-2"></i>
+                                        User <strong>${user.full_name}</strong> (${user.username}) has requested a password reset.
+                                    </div>
+                                    <a href="{{ url_for('edit_user', user_id=0).replace('0', '__USER_ID__') }}" class="btn btn-sm btn-outline-danger">Reset Password</a>
+                                </div>
+                        `.replace('__USER_ID__', user.id);
+                    });
+                    html += `</div></div>`;
+                }
+                container.innerHTML = html;
+            })
+            .catch(error => console.error('Error fetching password reset requests:', error));
+    }
+
+
+    function fetchAndRenderActivityLogs() {
+        const container = document.getElementById('activityLogContainer');
+        if (!container) return;
+
+        fetch('{{ url_for("api_dashboard_activity_logs") }}')
+            .then(response => {
+                if (!response.ok) {
+                     if (response.status === 403) {
+                        console.warn('Access denied to activity logs API. Stopping polling.');
+                        container.innerHTML = '<p class="text-muted">Access denied to activity log data.</p>';
+                        return Promise.reject('Access Denied');
+                    }
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                return response.json();
+            })
+            .then(logs => {
+                let html = '';
+                if (logs.length > 0) {
+                    html = `<ul class="list-group list-group-flush">`;
+                    logs.forEach(log => {
+                        html += `
+                            <li class="list-group-item">
+                                <p class="mb-0"><strong>${log.user_full_name}</strong> (${log.user_username}) ${log.action}</p>
+                                <small class="text-muted">${formatUTCToLocal(log.timestamp)}</small>
+                            </li>
+                        `;
+                    });
+                    html += `</ul>`;
+                } else {
+                    html = `<p class="text-muted">No recent activity recorded.</p>`;
+                }
+                container.innerHTML = html;
+            })
+            .catch(error => console.error('Error fetching activity logs:', error));
+    }
+
+
+    function fetchAndRenderLatestAnnouncement() {
+        const container = document.getElementById('latestAnnouncementContainer');
+        if (!container) return;
+
+        fetch('{{ url_for("api_dashboard_latest_announcement") }}')
+            .then(response => {
+                if (!response.ok) {
+                    if (response.status === 403) { // User might be suspended and restricted
+                        console.warn('Access denied to announcement API. Stopping polling.');
+                        container.innerHTML = `<div class="card-header card-header-custom"><i class="fas fa-bullhorn me-2"></i>Latest Announcement</div><div class="card-body"><p class="card-text text-center text-muted">Access denied to announcements.</p></div>`;
+                        return Promise.reject('Access Denied');
+                    }
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                return response.json();
+            })
+            .then(announcement => {
+                let html = `<div class="card-header card-header-custom d-flex justify-content-between align-items-center"><span><i class="fas fa-bullhorn me-2"></i>Latest Announcement</span><button type="button" class="btn-close btn-close-white" id="dismiss-announcement-btn" aria-label="Dismiss"></button></div><div class="card-body">`;
+                if (announcement) {
+                    html += `
+                        <h5 class="card-title">${announcement.title}</h5>
+                        <p class="card-text">${announcement.message}</p>
+                    `;
+                    if (announcement.action_link) {
+                        html += `<a href="${announcement.action_link}" class="btn btn-sm btn-outline-primary mt-2"><i class="fas fa-link me-1"></i>View Action</a>`;
+                    }
+                    html += `<a href="{{ url_for('announcements') }}" class="btn btn-outline-dark mt-2 ms-2">View All</a>`;
+                } else {
+                    html += `<p class="card-text">No new announcements.</p>`;
+                }
+                html += `</div>`;
+                container.innerHTML = html;
+
+                // Re-attach event listener for dismiss button after content is rendered
+                const dismissBtn = document.getElementById('dismiss-announcement-btn');
+                if (dismissBtn) {
+                    dismissBtn.addEventListener('click', function() {
+                        // This logic needs to be robust, possibly sending an AJAX request
+                        // to mark the announcement as read. For now, it just hides.
+                        // The actual marking read happens on subsequent page loads if not explicitly handled.
+                        container.style.display = 'none'; // Simple hide
+                    });
+                }
+            })
+            .catch(error => console.error('Error fetching latest announcement:', error));
+    }
+
+
+    function fetchAndRenderVarianceAlerts() {
+        const container = document.getElementById('varianceAlertsContainer');
+        if (!container) return;
+
+        fetch('{{ url_for("api_dashboard_variance_alerts") }}')
+            .then(response => {
+                if (!response.ok) {
+                    if (response.status === 403) {
+                        console.warn('Access denied to variance alerts API. Stopping polling.');
+                        container.innerHTML = `<div class="card-header card-header-custom"><i class="fas fa-exclamation-triangle me-2"></i>Today's Variance Alerts</div><div class="card-body"><p class="card-text text-center text-muted">Access denied to variance data.</p></div>`;
+                        return Promise.reject('Access Denied');
+                    }
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                return response.json();
+            })
+            .then(data => {
+                const { bod_submitted, alerts } = data;
+                let html = `<div class="card-header card-header-custom"><i class="fas fa-exclamation-triangle me-2"></i>Today's Variance Alerts</div><div class="card-body">`;
+                if (bod_submitted) {
+                    if (alerts.length > 0) {
+                        html += `<ul class="list-group list-group-flush">`;
+                        alerts.forEach(alert => {
+                            const badgeClass = alert.variance > 0 ? 'bg-success' : 'bg-danger';
+                            html += `
+                                <li class="list-group-item d-flex justify-content-between align-items-center">
+                                    ${alert.name}
+                                    <span class="badge ${badgeClass} rounded-pill">${alert.variance > 0 ? '+' : ''}${alert.variance}</span>
+                                </li>
+                            `;
+                        });
+                        html += `</ul><div class="d-grid mt-3"><a href="{{ url_for('variance') }}" class="btn btn-sm btn-outline-dark">View Full Report</a></div>`;
+                    } else {
+                        html += `<p class="card-text text-success"><i class="fas fa-check-circle me-2"></i>No variances detected today.</p>`;
+                    }
+                } else {
+                    html += `<p class="card-text text-muted">Complete daily counts to see variance alerts.</p>`;
+                }
+                html += `</div>`;
+                container.innerHTML = html;
+            })
+            .catch(error => console.error('Error fetching variance alerts:', error));
+    }
+
+
+    function fetchAndRenderLocationStatuses() {
+        const container = document.getElementById('locationStatusesContainer');
+        if (!container) return;
+
+        fetch('{{ url_for("api_dashboard_location_statuses") }}')
+            .then(response => {
+                if (!response.ok) {
+                    if (response.status === 403) {
+                        console.warn('Access denied to location statuses API. Stopping polling.');
+                        container.innerHTML = `<p class="card-text text-danger">Access denied to daily tasks data.</p>`;
+                        return Promise.reject('Access Denied');
+                    }
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                return response.json();
+            })
+            .then(data => {
+                const { bod_submitted, location_statuses } = data;
+                let initialMessage = '';
+                {% if current_user.has_role('manager') or current_user.has_role('general_manager') %}
+                    initialMessage = 'Review and manage today\'s inventory counts.';
+                {% else %}
+                    initialMessage = 'Complete your inventory counts for each location.';
+                {% endif %}
+                let html = `<p class="card-text">${initialMessage}</p><div class="d-grid gap-2 mt-auto">`;
+
+                location_statuses.forEach(item => {
+                    let s_class, s_icon, s_text;
+                    if (item.status === 'not_started') {
+                        s_class = 'status-not-started';
+                        s_icon = 'fas fa-list-ol';
+                        s_text = 'Start Count';
+                    } else if (item.status === 'counted') {
+                        s_class = 'status-counted';
+                        s_icon = 'fas fa-check';
+                        s_text = 'Make Corrections';
+                    } else { // corrected
+                        s_class = 'status-corrected';
+                        s_icon = 'fas fa-pencil-alt';
+                        s_text = 'Review Corrected';
+                    }
+
+                    const url = `{{ url_for('submit_count', location_slug='__SLUG__') }}`.replace('__SLUG__', item.slug);
+                    let tooltipText = '';
+                    {% if current_user.has_role('manager') or current_user.has_role('general_manager') %}
+                        tooltipText = bod_submitted ? '' : 'Please submit \\\'Beginning of Day\\\' counts first.';
+                    {% else %}
+                        tooltipText = bod_submitted ? '' : 'A manager must submit \\\'Beginning of Day\\\' counts first.';
+                    {% endif %}
+                    const disabledClass = bod_submitted ? '' : 'disabled';
+                    const tabindex = bod_submitted ? '' : 'tabindex="-1" aria-disabled="true"';
+
+                    if (!bod_submitted) {
+                        html += `
+                            <span class="d-grid" data-bs-toggle="tooltip" data-bs-placement="top" title="${tooltipText}">
+                                <a href="#" class="btn status-btn ${s_class} ${disabledClass}" ${tabindex}>
+                                    <i class="${s_icon} me-2"></i><strong>${item.name}:</strong> ${s_text}
+                                </a>
+                            </span>
+                        `;
+                    } else {
+                        html += `
+                            <a href="${url}" class="btn status-btn ${s_class}">
+                                <i class="${s_icon} me-2"></i><strong>${item.name}:</strong> ${s_text}
+                            </a>
+                        `;
+                    }
+                });
+                html += `</div>`;
+                container.innerHTML = html;
+
+                 // Re-initialize tooltips if you're dynamically adding elements with them
+                const tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'))
+                tooltipTriggerList.map(function (tooltipTriggerEl) {
+                    return new bootstrap.Tooltip(tooltipTriggerEl)
+                })
+            })
+            .catch(error => console.error('Error fetching location statuses:', error));
+    }
+
+
+    // ==========================================================
+    // Initial calls and Intervals based on user roles
+    // ==========================================================
+
+    // Staff roles (bartender, waiter, skullers)
+    {% if current_user.has_role('bartender') or current_user.has_role('waiter') or current_user.has_role('skullers') %}
+        fetchAndRenderOpenShifts();
+        setInterval(fetchAndRenderOpenShifts, 15000); // Every 15 seconds
+        fetchAndRenderLocationStatuses();
+        setInterval(fetchAndRenderLocationStatuses, 15000); // Every 15 seconds
+        fetchAndRenderLatestAnnouncement();
+        setInterval(fetchAndRenderLatestAnnouncement, 30000); // Every 30 seconds
+    {% endif %}
+
+    // System Admin role
+    {% if current_user.has_role('system_admin') %}
+        fetchAndRenderPasswordResetRequests();
+        setInterval(fetchAndRenderPasswordResetRequests, 20000); // Every 20 seconds
+        fetchAndRenderActivityLogs();
+        setInterval(fetchAndRenderActivityLogs, 10000); // Every 10 seconds
+        fetchAndRenderLatestAnnouncement(); // Already called if staff, ensure it runs for admin-specific targeting if needed
+        setInterval(fetchAndRenderLatestAnnouncement, 30000); // Every 30 seconds
+        fetchAndRenderVarianceAlerts();
+        setInterval(fetchAndRenderVarianceAlerts, 20000); // Every 20 seconds
+        fetchAndRenderLocationStatuses(); // Already called if staff
+        setInterval(fetchAndRenderLocationStatuses, 15000); // Every 15 seconds
+    {% endif %}
+
+    // Manager / General Manager role
+    {% if current_user.has_role('manager') or current_user.has_role('general_manager') %}
+        fetchAndRenderLocationStatuses();
+        setInterval(fetchAndRenderLocationStatuses, 15000); // Every 15 seconds
+        fetchAndRenderLatestAnnouncement();
+        setInterval(fetchAndRenderLatestAnnouncement, 30000); // Every 30 seconds
+        fetchAndRenderVarianceAlerts();
+        setInterval(fetchAndRenderVarianceAlerts, 20000); // Every 20 seconds
+    {% endif %}
+
+    // Business Owner role
+    {% if current_user.has_role('owners') %}
+        fetchAndRenderLatestAnnouncement();
+        setInterval(fetchAndRenderLatestAnnouncement, 30000); // Every 30 seconds
+        fetchAndRenderVarianceAlerts();
+        setInterval(fetchAndRenderVarianceAlerts, 20000); // Every 20 seconds
+    {% endif %}
+
+    // Initialize tooltips on page load
+    const tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'))
+    tooltipTriggerList.map(function (tooltipTriggerEl) {
+        return new bootstrap.Tooltip(tooltipTriggerEl)
+    })
+
+</script>
 {% endblock %}
---- END OF FILE dashboard.html ---

@@ -17,8 +17,8 @@
             </p>
 
             <!-- Product Type Filter Bar -->
-            {% set product_types = products|map(attribute='type')|unique|sort %}
-            {% include '_filter_bar.html' %}
+            {# MODIFIED: Pass all_product_types explicitly to include #}
+            {% include '_filter_bar.html' with context %}
 
             <!-- Count Form -->
             <form action="{{ url_for('submit_count', location_slug=location.name|replace(' ', '_')|lower) }}"
@@ -42,16 +42,15 @@
 
                 <!-- Table -->
                 <div class="table-responsive">
-                    <table class="table table-striped table-hover align-middle">
+                    <table class="table table-striped table-hover align-middle" id="countTable">
                         <thead class="table-dark">
                             <tr>
                                 {% if current_counts %}
                                     <th class="text-center" style="width: 10%;">Correct?</th>
                                 {% endif %}
-                                <th>Product</th>
-                                <th class="d-none">Type</th>
+                                <th class="product-name-header">Product</th>
+                                <th class="product-type-header d-none">Type</th>
                                 <th style="width: 25%;">Count</th>
-                                {# NEW: Display Expected and Variance Headings #}
                                 <th style="width: 15%;">Expected</th>
                                 <th style="width: 15%;">Variance</th>
                                 <th>Comment</th>
@@ -87,7 +86,7 @@
                                     {% endif %}
 
                                     <td class="fw-bold product-name">{{ product.name }}</td>
-                                    <td class="d-none product-type">{{ product.type }}</td>
+                                    <td class="product-type d-none">{{ product.type }}</td>
                                     <td>
                                         {% set unit = product.unit_of_measure|lower %}
                                         {% set step = '0.01' if 'kg' in unit or 'l' in unit else '1' %}
@@ -102,10 +101,9 @@
                                             <span class="input-group-text">{{ product.unit_of_measure }}</span>
                                         </div>
                                     </td>
-                                    {# NEW: Display Expected and Variance Values (read-only) #}
                                     <td>
-                                        <input type="text" class="form-control" 
-                                               value="{{ latest_count_for_product.expected_amount|round(2) if latest_count_for_product and latest_count_for_product.expected_amount is not none else 'N/A' }}" 
+                                        <input type="text" class="form-control"
+                                               value="{{ latest_count_for_product.expected_amount|round(2) if latest_count_for_product and latest_count_for_product.expected_amount is not none else 'N/A' }}"
                                                readonly>
                                     </td>
                                     <td>
@@ -155,6 +153,8 @@
 {% block scripts %}
 <script>
 document.addEventListener('DOMContentLoaded', function() {
+    initializeTableFilters('product-search', 'type-filter', '#countTable tbody');
+
     const countForm = document.getElementById('count-form');
     const submitTypeInput = document.getElementById('submit-type');
     const isCorrectionMode = document.querySelector('.correction-checkbox') !== null;
@@ -166,10 +166,11 @@ document.addEventListener('DOMContentLoaded', function() {
         const checkAll = document.getElementById('checkAll');
 
         const toggleRowInputs = (row, isEnabled) => {
-            row.querySelector('.count-input').disabled = !isEnabled;
-            row.querySelector('.comment-input').disabled = !isEnabled;
-            // Also enable/disable the submit button if relevant inputs are enabled
-            updateSubmitButtonState(); 
+            const countInput = row.querySelector('.count-input');
+            const commentInput = row.querySelector('.comment-input');
+            if (countInput) countInput.disabled = !isEnabled;
+            if (commentInput) commentInput.disabled = !isEnabled;
+            updateSubmitButtonState();
         };
 
         const updateSubmitButtonState = () => {
@@ -188,8 +189,7 @@ document.addEventListener('DOMContentLoaded', function() {
         if (checkAll) {
             checkAll.addEventListener('change', (e) => {
                 checkboxes.forEach(cb => {
-                    // Only toggle if the checkbox itself is not disabled (e.g., due to self-correction lock)
-                    if (!cb.disabled) { 
+                    if (!cb.disabled) {
                         cb.checked = e.target.checked;
                         const row = cb.closest('tr');
                         toggleRowInputs(row, e.target.checked);
@@ -204,8 +204,8 @@ document.addEventListener('DOMContentLoaded', function() {
 
     if (countForm) {
         countForm.addEventListener('submit', function() {
-            countForm.querySelectorAll('input, select').forEach(input => {
-                input.disabled = false; // Ensure all fields are enabled for submission
+            countForm.querySelectorAll('.count-input, .comment-input, .correction-checkbox').forEach(input => {
+                input.disabled = false;
             });
         });
     }

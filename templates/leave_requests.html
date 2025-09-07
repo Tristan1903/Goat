@@ -10,7 +10,7 @@
             <p class="text-muted mb-4">Submit and review requests for time off.</p>
             <div class="p-4 rounded-3 mb-4" style="background-color: #f8f9fa;">
                 <h4 class="mb-3">Submit a New Request</h4>
-                <form method="POST" enctype="multipart/form-data">
+                <form method="POST" enctype="multipart/form-data" id="new-leave-request-form"> {# Added ID to form #}
                     <div class="row g-3">
                         <div class="col-md-6">
                             <label for="start_date" class="form-label">Start Date</label>
@@ -29,7 +29,7 @@
                             <input class="form-control" type="file" id="document" name="document">
                         </div>
                         <div class="col-12 d-grid">
-                            <button type="submit" class="btn btn-primary">Submit Request</button>
+                            <button type="submit" class="btn btn-primary" id="submit-leave-request-btn">Submit Request</button> {# Added ID #}
                         </div>
                     </div>
                 </form>
@@ -64,10 +64,10 @@
                             <td>
                                 {% if current_user.has_role('manager') or current_user.has_role('general_manager') or current_user.has_role('system_admin') %}
                                     {% if req.status == 'Pending' %}
-                                    <form action="{{ url_for('update_leave_status', req_id=req.id, status='Approved') }}" method="post" class="d-inline">
+                                    <form action="{{ url_for('update_leave_status', req_id=req.id, status='Approved') }}" method="post" class="d-inline leave-action-form"> {# Added class #}
                                         <button class="btn btn-sm btn-outline-success">Approve</button>
                                     </form>
-                                    <form action="{{ url_for('update_leave_status', req_id=req.id, status='Denied') }}" method="post" class="d-inline">
+                                    <form action="{{ url_for('update_leave_status', req_id=req.id, status='Denied') }}" method="post" class="d-inline leave-action-form"> {# Added class #}
                                         <button class="btn btn-sm btn-outline-danger">Deny</button>
                                     </form>
                                     {% endif %}
@@ -87,4 +87,44 @@
         </div>
     </div>
 </div>
+
+{% block scripts %}
+<script>
+    document.addEventListener('DOMContentLoaded', function() {
+        // --- Shared function for loading state ---
+        function showLoading(buttonElement, originalText) {
+            buttonElement.disabled = true;
+            buttonElement.innerHTML = '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span> Submitting...';
+            if (!buttonElement.dataset.originalText) {
+                buttonElement.dataset.originalText = originalText;
+            }
+        }
+        // --- END Shared function ---
+
+        // --- New Leave Request Form Submission Loading State ---
+        const newLeaveRequestForm = document.getElementById('new-leave-request-form');
+        const submitLeaveRequestBtn = document.getElementById('submit-leave-request-btn');
+
+        if (newLeaveRequestForm && submitLeaveRequestBtn) {
+            newLeaveRequestForm.addEventListener('submit', function() {
+                showLoading(submitLeaveRequestBtn, submitLeaveRequestBtn.textContent);
+            });
+        }
+        // --- END New Leave Request Form Submission Loading State ---
+
+        // --- Approve/Deny Leave Request Forms Loading State ---
+        const leaveActionForms = document.querySelectorAll('.leave-action-form');
+        leaveActionForms.forEach(form => {
+            form.addEventListener('submit', function(event) {
+                // Find the specific button that triggered this form submission
+                const button = event.submitter;
+                if (button) {
+                    showLoading(button, button.textContent);
+                }
+            });
+        });
+        // --- END Approve/Deny Leave Request Forms Loading State ---
+    });
+</script>
+{% endblock scripts %}
 {% endblock %}

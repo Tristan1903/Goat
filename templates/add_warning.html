@@ -1,0 +1,133 @@
+{% extends "base.html" %}
+
+{% block title %}Issue New Warning{% endblock %}
+
+{% block content %}
+<div class="container mt-4">
+    <div class="row justify-content-center">
+        <div class="col-lg-8">
+            <div class="card shadow-sm">
+                <div class="card-body p-4 p-md-5">
+                    <h2 class="card-title mb-2">Issue New Warning</h2>
+                    <p class="text-muted mb-4">Record a warning for a staff member.</p>
+                    <form action="{{ url_for('add_warning') }}" method="POST">
+                        
+                        {# NEW: BOH/FOH/All Staff Filter Buttons #}
+                        <div class="mb-3">
+                            <label class="form-label d-block">Filter Staff:</label>
+                            <div class="btn-group" role="group" aria-label="Staff Filter Buttons">
+                                <button type="button" class="btn btn-outline-primary active" data-filter="all" id="filter-all-staff-btn">All Staff</button>
+                                <button type="button" class="btn btn-outline-primary" data-filter="boh" id="filter-boh-staff-btn">Back of House</button>
+                                <button type="button" class="btn btn-outline-primary" data-filter="foh" id="filter-foh-staff-btn">Front of House</button>
+                            </div>
+                        </div>
+
+                        <div class="mb-3">
+                            <label for="warned_user" class="form-label">Staff Member</label>
+                            <select id="warned_user" name="user_id" class="form-select" required>
+                                <option value="" disabled selected>Select staff member...</option>
+                                {% for user in staff_users %}
+                                    {# MODIFIED: Add data-roles attribute to each option #}
+                                    {% set user_role_names = user.roles|map(attribute='name')|list %}
+                                    {% set roles_attr = 'data-roles=' + user_role_names|join(',') %}
+                                    <option value="{{ user.id }}" {{ roles_attr }}>
+                                        {{ user.full_name }} ({{ user.username }})
+                                    </option>
+                                {% endfor %}
+                            </select>
+                        </div>
+
+                        <div class="mb-3">
+                            <label for="issued_by" class="form-label">Issued By</label>
+                            <input type="text" id="issued_by" class="form-control" value="{{ current_user.full_name }}" readonly>
+                            <input type="hidden" name="issued_by_id" value="{{ current_user.id }}">
+                        </div>
+
+                        <div class="mb-3">
+                            <label for="date_issued" class="form-label">Date Issued</label>
+                            <input type="date" id="date_issued" name="date_issued" class="form-control" value="{{ today_date.isoformat() }}" required>
+                        </div>
+
+                        <div class="mb-3">
+                            <label for="reason" class="form-label">Reason for Warning</label>
+                            <textarea id="reason" name="reason" class="form-control" rows="4" required></textarea>
+                        </div>
+
+                        <div class="mb-3">
+                            <label for="severity" class="form-label">Severity</label>
+                            <select id="severity" name="severity" class="form-select" required>
+                                <option value="Minor">Minor</option>
+                                <option value="Major">Major</option>
+                                <option value="Critical">Critical</option>
+                            </select>
+                        </div>
+
+                        <div class="mb-3">
+                            <label for="notes" class="form-label">Internal Notes (Optional, not visible to staff)</label>
+                            <textarea id="notes" name="notes" class="form-control" rows="3"></textarea>
+                        </div>
+                        
+                        <div class="d-grid gap-2 d-md-flex justify-content-md-end mt-4">
+                            <a href="{{ url_for('manage_warnings') }}" class="btn btn-secondary me-md-2">Cancel</a>
+                            <button type="submit" class="btn btn-primary">Issue Warning</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+{% block scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const filterButtons = document.querySelectorAll('.btn-group button[data-filter]');
+    const warnedUserSelect = document.getElementById('warned_user');
+    const allStaffOptions = Array.from(warnedUserSelect.options).filter(option => option.value !== ''); // Exclude disabled placeholder
+
+    function filterStaffDropdown(filterType) {
+        // First, hide all options
+        allStaffOptions.forEach(option => option.style.display = 'none');
+
+        // Then, show relevant options based on filterType
+        if (filterType === 'all') {
+            allStaffOptions.forEach(option => option.style.display = '');
+        } else if (filterType === 'boh') {
+            allStaffOptions.forEach(option => {
+                const roles = option.dataset.roles ? option.dataset.roles.split(',') : [];
+                if (roles.includes('bartender') || roles.includes('skullers')) {
+                    option.style.display = '';
+                }
+            });
+        } else if (filterType === 'foh') {
+            allStaffOptions.forEach(option => {
+                const roles = option.dataset.roles ? option.dataset.roles.split(',') : [];
+                if (roles.includes('waiter')) {
+                    option.style.display = '';
+                }
+            });
+        }
+        
+        // Reset the select dropdown to its placeholder if the currently selected option is hidden
+        if (warnedUserSelect.selectedIndex > 0 && warnedUserSelect.options[warnedUserSelect.selectedIndex].style.display === 'none') {
+            warnedUserSelect.selectedIndex = 0; // Select the "Select staff member..." option
+        }
+
+        // Update active button state
+        filterButtons.forEach(button => button.classList.remove('active'));
+        document.querySelector(`button[data-filter="${filterType}"]`).classList.add('active');
+    }
+
+    filterButtons.forEach(button => {
+        button.addEventListener('click', function() {
+            const filterType = this.dataset.filter;
+            filterStaffDropdown(filterType);
+        });
+    });
+
+    // Initial filter application on page load
+    filterStaffDropdown('{{ current_selection_type }}'); // Use the value passed from Flask (defaults to 'all')
+});
+</script>
+{% endblock scripts %}
+{% endblock %}

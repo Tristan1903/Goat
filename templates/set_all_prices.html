@@ -1,0 +1,513 @@
+{% extends "base.html" %}
+
+{% block title %}Set All Product Prices{% endblock %}
+
+{% block content %}
+<div class="container mt-4">
+    <div class="card shadow-sm">
+        <div class="card-body p-4 p-md-5">
+            <h2 class="card-title mb-2">Set All Product Prices</h2>
+            <p class="text-muted mb-4">Update the unit price for all products. You can also upload a CSV to pre-fill prices.</p>
+
+            <form action="{{ url_for('set_all_prices') }}" method="POST" id="set-prices-form">
+
+                {# CSV Upload Section (UNCHANGED) #}
+                <div class="p-3 mb-4 rounded-3" style="background-color: #f8f9fa;">
+                    <h5 class="mb-3">Upload Prices via CSV (Optional)</h5>
+                    <div class="input-group">
+                        <input class="form-control" type="file" id="price_csv_file" name="price_csv_file" accept=".csv">
+                        <button type="button" class="btn btn-outline-primary" id="upload-csv-btn">
+                            <i class="fas fa-file-upload me-2"></i>Upload & Pre-fill
+                        </button>
+                    </div>
+                    <div class="form-text mt-2">
+                        Your CSV should have a header line containing "Items" and "Cost/".
+                        Matching will be done by the "Items" column from the CSV or Product # (column E).
+                    </div>
+                </div>
+
+                {# MODIFIED: Filter and Grouping Options #}
+                <div class="p-4 rounded-3 mb-4" style="background-color: #e9ecef;">
+                    <div class="d-flex justify-content-between align-items-center mb-3">
+                        <h5 class="mb-0">View Options</h5>
+                        <button class="btn btn-sm btn-outline-secondary" type="button" data-bs-toggle="collapse" data-bs-target="#priceViewOptionsCollapse" aria-expanded="false" aria-controls="priceViewOptionsCollapse">
+                            <span class="toggle-text-show"><i class="fas fa-chevron-down me-1"></i> Show Filters</span>
+                            <span class="toggle-text-hide d-none"><i class="fas fa-chevron-up me-1"></i> Hide Filters</span>
+                        </button>
+                    </div>
+
+                    <div class="collapse" id="priceViewOptionsCollapse">
+                        <div class="row g-3">
+                            <div class="col-md-6">
+                                <label for="search_query_price" class="form-label">Search Product Name/Number:</label>
+                                <input type="text" id="search_query_price" name="search_query_price" class="form-control" placeholder="e.g., Vodka, 1507" value="{{ current_search_query if current_search_query is not none else '' }}">
+                            </div>
+                            <div class="col-md-6">
+                                <label for="type_filter_price" class="form-label">Filter by Type:</label>
+                                <select class="form-select" id="type_filter_price" name="type_filter_price">
+                                    <option value="all" {% if current_type_filter == 'all' %}selected{% endif %}>All Types</option>
+                                    {% for type in all_product_types %}
+                                        {# MODIFIED: Make option value lowercase to match data-product-type #}
+                                        <option value="{{ type | lower }}" {% if current_type_filter == type | lower %}selected{% endif %}>{{ type }}</option>
+                                    {% endfor %}
+                                </select>
+                            </div>
+                            <div class="col-md-6">
+                                <label for="group_by_price" class="form-label">Group By:</label>
+                                <select class="form-select" id="group_by_price" name="group_by_price">
+                                    <option value="none" {% if current_group_by == 'none' %}selected{% endif %}>No Grouping</option>
+                                    <option value="type" {% if current_group_by == 'type' %}selected{% endif %}>Product Type</option>
+                                </select>
+                            </div>
+                            <div class="col-md-6 d-flex align-items-end">
+                                <button type="button" id="clear-filters-price-btn" class="btn btn-outline-secondary w-100">
+                                    <i class="fas fa-filter-slash me-2"></i>Clear Filters
+                                </button>
+                            </div>
+                        </div>
+                        <div class="mt-3">
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" id="show_all_products_checkbox" checked>
+                                <label class="form-check-label" for="show_all_products_checkbox">
+                                    Show all products (uncheck to show only blank or changed prices)
+                                </label>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+
+                <div class="d-flex justify-content-between align-items-center mb-3">
+                    <h5 class="mb-0">Product List</h5>
+                </div>
+
+
+                {# MODIFIED: Table Structure with Product # and Grouping #}
+                {# This section will now be initially rendered by Jinja based on the server-side grouped_products #}
+                {% if grouped_products %}
+                    {% for group_name, products_in_group in grouped_products.items() %}
+                        <h5 class="mt-4 mb-2 product-group-header">{{ group_name }} ({{ products_in_group|length }} items)</h5>
+                        <div class="table-responsive mb-4 product-group-table">
+                            <table class="table table-striped table-hover align-middle" id="setPriceTable-{{ group_name | slugify }}">
+                                <thead class="table-dark">
+                                    <tr>
+                                        <th>Product Name</th>
+                                        <th>Product #</th>
+                                        <th>Type</th>
+                                        <th>Unit</th>
+                                        <th style="width: 25%;">Current Price / New Price</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {% for product in products_in_group %}
+                                    <tr data-product-id="{{ product.id }}"
+                                        data-product-name="{{ product.name | lower }}"
+                                        data-product-type="{{ product.type | lower }}" {# ENSURE THIS IS LOWERCASE #}
+                                        data-product-number="{{ product.product_number | lower if product.product_number is not none else '' }}"
+                                        data-original-price="{{ "%.2f"|format(product.unit_price) if product.unit_price is not none else '' }}"
+                                        class="product-row">
+                                        <td class="fw-bold product-name-cell">{{ product.name }}</td>
+                                        <td class="product-number-cell">{{ product.product_number if product.product_number is not none else 'N/A' }}</td>
+                                        <td class="product-type-cell">{{ product.type }}</td>
+                                        <td>{{ product.unit_of_measure }}</td>
+                                        <td>
+                                            <div class="input-group">
+                                                <span class="input-group-text">R</span>
+                                                <input type="number" step="0.01" min="0" class="form-control price-input"
+                                                       name="unit_price_{{ product.id }}"
+                                                       placeholder="e.g., 25.50"
+                                                       value="{{ "%.2f"|format(product.unit_price) if product.unit_price is not none else '' }}">
+                                            </div>
+                                        </td>
+                                    </tr>
+                                    {% endfor %}
+                                </tbody>
+                            </table>
+                        </div>
+                    {% endfor %}
+                {% else %}
+                    <p class="text-muted">No products found.</p>
+                {% endif %}
+
+
+                <div class="d-grid gap-2 d-md-flex justify-content-md-end mt-4">
+                    <a href="{{ url_for('products') }}" class="btn btn-secondary me-md-2">Cancel</a>
+                    <button type="submit" class="btn btn-primary">Save All Prices</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+{% block scripts %}
+<script src="https://cdn.jsdelivr.net/npm/papaparse@5.3.2/papaparse.min.js"></script>
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    console.log("DEBUG: DOMContentLoaded fired.");
+
+    const searchInput = document.getElementById('search_query_price');
+    const typeFilterSelect = document.getElementById('type_filter_price');
+    const groupBySelect = document.getElementById('group_by_price');
+    const clearFiltersBtn = document.getElementById('clear-filters-price-btn');
+    const showAllProductsCheckbox = document.getElementById('show_all_products_checkbox');
+
+    let allProductRowsData = [];
+    document.querySelectorAll('.product-row').forEach(row => {
+        allProductRowsData.push({
+            element: row,
+            id: row.dataset.productId,
+            name: row.dataset.productName,
+            type: row.dataset.productType, // This should already be lowercase due to Jinja filter
+            number: row.dataset.productNumber,
+            originalPrice: row.dataset.originalPrice,
+            inputElement: row.querySelector('.price-input')
+        });
+    });
+    console.log("DEBUG: allProductRowsData initialized with", allProductRowsData.length, "products.");
+    if (allProductRowsData.length > 0) {
+        console.log("DEBUG: Example product.type from allProductRowsData:", allProductRowsData[0].type); // Log an example type
+    }
+
+    const priceViewOptionsCollapseElement = document.getElementById('priceViewOptionsCollapse');
+    const toggleButton = document.querySelector('[data-bs-target="#priceViewOptionsCollapse"]');
+    const toggleTextShow = toggleButton.querySelector('.toggle-text-show');
+    const toggleTextHide = toggleButton.querySelector('.toggle-text-hide');
+
+    if (priceViewOptionsCollapseElement && toggleButton) {
+        priceViewOptionsCollapseElement.addEventListener('show.bs.collapse', function () {
+            toggleTextShow.classList.add('d-none');
+            toggleTextHide.classList.remove('d-none');
+            toggleButton.setAttribute('aria-expanded', 'true');
+        });
+
+        priceViewOptionsCollapseElement.addEventListener('hide.bs.collapse', function () {
+            toggleTextShow.classList.remove('d-none');
+            toggleTextHide.classList.add('d-none');
+            toggleButton.setAttribute('aria-expanded', 'false');
+        });
+    }
+
+
+    function applyFiltersAndGrouping() {
+        console.log("DEBUG: applyFiltersAndGrouping started.");
+        const searchTerm = searchInput.value.toLowerCase();
+        // MODIFIED: Ensure selectedType is always lowercase for comparison
+        const selectedType = typeFilterSelect.value.toLowerCase();
+        const selectedGroup = groupBySelect.value;
+        const showAll = showAllProductsCheckbox.checked;
+
+        console.log(`DEBUG (Filter State): Search: "${searchTerm}", Type: "${selectedType}", Group: "${selectedGroup}", ShowAll: ${showAll}`);
+
+
+        let filteredProducts = allProductRowsData.filter(product => {
+            const nameMatch = product.name.includes(searchTerm);
+            const numberMatch = product.number.includes(searchTerm);
+            
+            // Log product type for comparison
+            console.log(`DEBUG (Filtering Product): Name: "${product.name}", Type: "${product.type}", SelectedType: "${selectedType}"`);
+            const typeMatch = selectedType === 'all' || product.type === selectedType;
+
+            let priceChangeCondition = true;
+            if (!showAll) {
+                const currentPrice = product.inputElement.value.trim();
+                const originalPrice = product.originalPrice.trim();
+                priceChangeCondition = (currentPrice === '' || currentPrice !== originalPrice);
+            }
+
+            const overallMatch = (nameMatch || numberMatch) && typeMatch && priceChangeCondition;
+            return overallMatch;
+        });
+        console.log("DEBUG: Filtered products count:", filteredProducts.length);
+
+        document.querySelectorAll('.product-group-header').forEach(el => el.remove());
+        document.querySelectorAll('.product-group-table').forEach(el => el.remove());
+
+        let newGroupedProducts = {};
+
+        if (selectedGroup === 'type') {
+            filteredProducts.forEach(p => {
+                // MODIFIED: Ensure groupKey is uppercase as before (consistent with new grouped_products structure)
+                const groupKey = p.type ? p.type.toUpperCase() : 'UNCATEGORIZED';
+                if (!newGroupedProducts[groupKey]) {
+                    newGroupedProducts[groupKey] = [];
+                }
+                newGroupedProducts[groupKey].push(p);
+            });
+            newGroupedProducts = Object.fromEntries(
+                Object.entries(newGroupedProducts).sort(([a], [b]) => a.localeCompare(b))
+            );
+        } else {
+            newGroupedProducts['All Products'] = filteredProducts.sort((a, b) => a.name.localeCompare(b.name));
+        }
+        console.log("DEBUG: New grouped products structure:", newGroupedProducts);
+
+
+        const formElement = document.getElementById('set-prices-form');
+        const submitButtonsDiv = formElement.querySelector('.d-grid.gap-2.d-md-flex.justify-content-md-end.mt-4');
+
+        allProductRowsData.forEach(product => {
+            product.element.style.display = 'none';
+        });
+
+        Object.keys(newGroupedProducts).forEach(groupName => {
+            const productsInGroup = newGroupedProducts[groupName];
+            console.log(`DEBUG: Rendering group: "${groupName}" with ${productsInGroup.length} products.`);
+
+            const header = document.createElement('h5');
+            header.className = 'mt-4 mb-2 product-group-header';
+            header.textContent = `${groupName} (${productsInGroup.length} items)`;
+            formElement.insertBefore(header, submitButtonsDiv);
+
+            const tableResponsiveDiv = document.createElement('div');
+            tableResponsiveDiv.className = 'table-responsive mb-4 product-group-table';
+
+            const table = document.createElement('table');
+            table.className = 'table table-striped table-hover align-middle';
+            table.innerHTML = `
+                <thead class="table-dark">
+                    <tr>
+                        <th>Product Name</th>
+                        <th>Product #</th>
+                        <th>Type</th>
+                        <th>Unit</th>
+                        <th style="width: 25%;">Current Price / New Price</th>
+                    </tr>
+                </thead>
+                <tbody></tbody>
+            `;
+            const tbody = table.querySelector('tbody');
+
+            if (Array.isArray(productsInGroup)) {
+                productsInGroup.forEach(product => {
+                    tbody.appendChild(product.element);
+                    product.element.style.display = '';
+                });
+            } else {
+                console.error(`ERROR: productsInGroup for group "${groupName}" is not an array:`, productsInGroup);
+            }
+
+            tableResponsiveDiv.appendChild(table);
+            formElement.insertBefore(tableResponsiveDiv, submitButtonsDiv);
+        });
+
+        if (filteredProducts.length === 0 && Object.keys(newGroupedProducts).length === 0) {
+            const noProductsMessage = document.createElement('p');
+            noProductsMessage.className = 'text-muted mt-4 product-group-table';
+            noProductsMessage.textContent = 'No products found matching your criteria.';
+            formElement.insertBefore(noProductsMessage, submitButtonsDiv);
+        }
+        console.log("DEBUG: applyFiltersAndGrouping finished rendering.");
+    }
+
+
+    searchInput.addEventListener('keyup', applyFiltersAndGrouping);
+    typeFilterSelect.addEventListener('change', applyFiltersAndGrouping);
+    groupBySelect.addEventListener('change', applyFiltersAndGrouping);
+    showAllProductsCheckbox.addEventListener('change', applyFiltersAndGrouping);
+    allProductRowsData.forEach(product => {
+        product.inputElement.addEventListener('input', applyFiltersAndGrouping);
+    });
+
+    clearFiltersBtn.addEventListener('click', function() {
+        searchInput.value = '';
+        typeFilterSelect.value = 'all';
+        groupBySelect.value = 'none';
+        showAllProductsCheckbox.checked = true;
+        applyFiltersAndGrouping();
+    });
+
+
+    const priceViewOptionsCollapse = new bootstrap.Collapse(priceViewOptionsCollapseElement, { toggle: false });
+
+
+    const priceCsvFileInput = document.getElementById('price_csv_file');
+    const uploadCsvBtn = document.getElementById('upload-csv-btn');
+
+    if (uploadCsvBtn) {
+        uploadCsvBtn.addEventListener('click', function() {
+            console.log("DEBUG: 'Upload & Pre-fill' button clicked.");
+            if (!priceCsvFileInput.files.length) {
+                flashMessage('Please select a CSV file to upload.', 'warning');
+                return;
+            }
+            const file = priceCsvFileInput.files[0];
+
+            let headerSearchPhase = true;
+            let itemsHeaderRowFound = false;
+            let costHeaderRowFound = false;
+            let currentCsvRowIndex = 0;
+            
+            let productColumnIndex = -1;
+            let priceColumnIndex = -1;
+            let itemNumberColumnIndex = -1;
+
+            const productsByName = {}; // Map product names (lowercase) to their *full product data object*
+            const productsByNumber = {}; // Map product numbers (lowercase) to their *full product data object*
+
+            // MODIFIED: Store the whole product data object directly
+            allProductRowsData.forEach(product => {
+                if (product.name) productsByName[product.name] = product;
+                if (product.number) productsByNumber[product.number] = product;
+            });
+            console.log("DEBUG (Local Products by Name for CSV Matching):", productsByName);
+            console.log("DEBUG (Local Products by Number for CSV Matching):", productsByNumber);
+
+
+            let pricesUpdatedCount = 0;
+            let pricesSkippedCount = 0;
+            let hasFatalError = false;
+
+            Papa.parse(file, {
+                skipEmptyLines: true,
+                dynamicTyping: false,
+                step: function(row, parser) {
+                    if (hasFatalError) {
+                        parser.abort();
+                        return;
+                    }
+
+                    const current_rowData = row.data && Array.isArray(row.data) ? row.data : [];
+                    const cellValues = Array.isArray(current_rowData[0]) ? current_rowData[0] : current_rowData;
+
+                    if (!cellValues || cellValues.length === 0) {
+                        return;
+                    }
+
+                    // --- Header Detection Phase ---
+                    if (headerSearchPhase) {
+                        currentCsvRowIndex++;
+
+                        if (!itemsHeaderRowFound) {
+                            const itemsIdx = cellValues.findIndex(cell => typeof cell === 'string' && cell.trim() === 'Items');
+                            if (itemsIdx !== -1) {
+                                productColumnIndex = itemsIdx;
+                                itemsHeaderRowFound = true;
+                                console.log(`DEBUG (Found "Items" header in row ${currentCsvRowIndex}, index ${productColumnIndex})`);
+                            }
+                        }
+
+                        if (!costHeaderRowFound) {
+                            const costIdx = cellValues.findIndex(cell => typeof cell === 'string' && cell.trim().includes('Cost/'));
+                            if (costIdx !== -1) {
+                                priceColumnIndex = costIdx;
+                                costHeaderRowFound = true;
+                                console.log(`DEBUG (Found "Cost/" header in row ${currentCsvRowIndex}, index ${priceColumnIndex})`);
+                            }
+                        }
+                        
+                        itemNumberColumnIndex = 4;
+
+                        if (itemsHeaderRowFound && costHeaderRowFound) {
+                            headerSearchPhase = false;
+                            
+                            const maxIndexNeeded = Math.max(productColumnIndex, priceColumnIndex, itemNumberColumnIndex);
+                            if (productColumnIndex === -1 || priceColumnIndex === -1 || itemNumberColumnIndex === -1 ||
+                                cellValues.length <= maxIndexNeeded) {
+                                console.error(`DEBUG (Header Detection Error): Row found with "Items" and "Cost/" but not enough columns. cellValues.length: ${cellValues.length}, Expected max index: ${maxIndexNeeded}`);
+                                flashMessage('CSV header detected, but crucial data columns (like price) are missing or misplaced. Please check CSV format.', 'danger');
+                                hasFatalError = true;
+                                parser.abort();
+                                return;
+                            }
+
+                            console.log("DEBUG (Header Detection Complete):", {productColumnIndex, priceColumnIndex, itemNumberColumnIndex});
+                            flashMessage('CSV header detected. Pre-filling prices...', 'info');
+                            return;
+                        }
+
+                        if (currentCsvRowIndex > 20) {
+                            flashMessage('Header rows matching "Items" and "Cost/" were not found after searching the first 20 rows. Please check CSV format.', 'danger');
+                            hasFatalError = true;
+                            parser.abort();
+                            return;
+                        }
+
+                        return;
+                    }
+
+                    // --- Data Row Processing (after header search phase is complete) ---
+                    if (!headerSearchPhase) {
+                        const maxIndexNeeded = Math.max(productColumnIndex, priceColumnIndex, itemNumberColumnIndex);
+                        if (cellValues.length <= maxIndexNeeded) {
+                            console.warn(`DEBUG (Skipping Malformed Data Row - Not enough columns): Length: ${cellValues.length}, Expected max index: ${maxIndexNeeded}, Raw Row:`, cellValues);
+                            pricesSkippedCount++;
+                            return;
+                        }
+
+                        let rawItemNumber = cellValues[itemNumberColumnIndex] || '';
+                        let itemNumberLower = String(rawItemNumber).toLowerCase().trim();
+
+                        if (!itemNumberLower) {
+                            console.log(`DEBUG (Skipped Irrelevant Row - Empty Item Number): Raw Row:`, cellValues);
+                            pricesSkippedCount++;
+                            return;
+                        }
+
+                        let rawProductName = cellValues[productColumnIndex] || '';
+                        let productNameFromCsv = rawProductName.toLowerCase().trim();
+                        let rawPrice = cellValues[priceColumnIndex];
+
+                        console.log(`DEBUG (CSV Data Row for Processing): Product Name: "${rawProductName}", Item Number: "${rawItemNumber}", Price: "${rawPrice}"`);
+
+                        if (productNameFromCsv.startsWith("tax:") || productNameFromCsv.startsWith("total:") || productNameFromCsv.includes("deposit") || productNameFromCsv.includes("page:")) {
+                            console.log(`DEBUG (Skipped Irrelevant Row - Content Filter): "${rawProductName}"`);
+                            pricesSkippedCount++;
+                            return;
+                        }
+
+                        let priceFromCsv;
+                        if (rawPrice !== null && rawPrice !== undefined && rawPrice !== '') {
+                            priceFromCsv = parseFloat(rawPrice);
+                        } else {
+                            priceFromCsv = NaN;
+                        }
+
+                        if (isNaN(priceFromCsv) || priceFromCsv < 0) {
+                            console.warn(`DEBUG (Skipped Invalid Price): Product '${rawProductName}' (Item #: '${rawItemNumber}'), Price: '${rawPrice}', Raw Row:`, cellValues);
+                            pricesSkippedCount++;
+                            return;
+                        }
+
+                        let matchedProduct = null;
+                        if (itemNumberLower && productsByNumber[itemNumberLower]) {
+                            matchedProduct = productsByNumber[itemNumberLower]; // This is the 'product' object from allProductRowsData
+                            console.log(`DEBUG (Match by Number): "${itemNumberLower}"`);
+                        }
+                        else if (productNameFromCsv && productsByName[productNameFromCsv]) {
+                            matchedProduct = productsByName[productNameFromCsv]; // This is the 'product' object from allProductRowsData
+                            console.log(`DEBUG (Match by Name - Fallback): "${productNameFromCsv}"`);
+                        }
+                        
+                        // MODIFIED: Access inputElement property directly on matchedProduct
+                        if (matchedProduct && matchedProduct.inputElement) {
+                            matchedProduct.inputElement.value = priceFromCsv.toFixed(2);
+                            pricesUpdatedCount++;
+                        } else {
+                            console.warn(`DEBUG (No Match Found OR Input Element Missing): CSV Product '${rawProductName}' (Item #: '${rawItemNumber}') not found in table or input element is missing. Matched Product:`, matchedProduct);
+                            pricesSkippedCount++;
+                        }
+                        applyFiltersAndGrouping();
+                    }
+                },
+                complete: function() {
+                    if (!hasFatalError) {
+                        flashMessage(`Successfully pre-filled prices for ${pricesUpdatedCount} products. ${pricesSkippedCount} products skipped (not found, invalid price, or irrelevant row).`, 'success');
+                    }
+                    applyFiltersAndGrouping();
+                },
+                error: function(err, file, inputElem, reason) {
+                    console.error("PapaParse error (full):", err, reason);
+                    if (!hasFatalError) {
+                        flashMessage('An error occurred during CSV parsing. Please check file format and console for details.', 'danger');
+                    }
+                    hasFatalError = true;
+                }
+            });
+        });
+    }
+    console.log("DEBUG: Script end.");
+    applyFiltersAndGrouping();
+});
+</script>
+{% endblock scripts %}
+{% endblock %}

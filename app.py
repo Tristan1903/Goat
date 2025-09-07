@@ -1,48 +1,42 @@
 # ==============================================================================
 # Imports
 # ==============================================================================
+
 import io
 import csv
 import os
 import json
+import re
 from datetime import date, datetime, timedelta, time
 from functools import wraps
 from werkzeug.utils import secure_filename
 
-from flask import (Flask, render_template, request, redirect, url_for, 
+from flask import (Flask, render_template, request, redirect, url_for,
                    flash, Response, jsonify, get_flashed_messages, send_from_directory, session)
 from flask_sqlalchemy import SQLAlchemy
 from flask_bcrypt import Bcrypt
-from flask_login import (LoginManager, UserMixin, login_user, logout_user, 
+from flask_login import (LoginManager, UserMixin, login_user, logout_user,
                        current_user, login_required)
 from sqlalchemy import distinct, func, or_
 
+from flask_mail import Mail, Message
+
 from google.oauth2.credentials import Credentials
-from google_auth_oauthlib.flow import Flow # Changed from InstalledAppFlow to Flow
+from google_auth_oauthlib.flow import Flow
 from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from googleapiclient.http import MediaIoBaseUpload
 
-from onesignal_sdk.client import Client
+from config import Config
 
 # ==============================================================================
 # App Configuration
 # ==============================================================================
+
 app = Flask(__name__)
-app.config['SECRET_KEY'] = 'your_very_secure_secret_key_change_me'
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///site.db'
-app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
-app.config['GOOGLE_DRIVE_CREDENTIALS_FILE'] = 'credentials.json' # Path to your downloaded client_secret.json/credentials.json
-app.config['GOOGLE_DRIVE_TOKEN_FILE'] = 'token.json'             # Where OAuth tokens will be stored/read from
-app.config['GOOGLE_DRIVE_SCOPES'] = ['https://www.googleapis.com/auth/drive.file'] # Access to files created or opened by the app
-app.config['GOOGLE_DRIVE_FOLDER_ID'] = '1-QrV8H0n5irrB_rFqkF83QXKyTv0vmXJ'
-app.config['GOOGLE_OAUTH_REDIRECT_URI'] = 'http://localhost:5000/google/callback'
-os.environ['OAUTHLIB_INSECURE_TRANSPORT'] = '1'
-
-app.config['ONESIGNAL_APP_ID'] = 'f9dc4bf9-1eb1-40d1-9f32-aa020e7fd108'
-app.config['ONESIGNAL_REST_API_KEY'] = 'os_v2_app_7hoex6i6wfandhzsviba476rbdtg63vwmiye4kvrodu7ool6xcd6qoykkfbzpuxx3z2akxyycf5owi7c362wgv4an5bllk525wxl3qa'
+app.config.from_object(Config)
 
 db = SQLAlchemy(app)
 bcrypt = Bcrypt(app)
@@ -50,90 +44,79 @@ login_manager = LoginManager(app)
 login_manager.login_view = 'login'
 login_manager.login_message_category = 'info'
 
-# ==============================================================================
-# Global OneSignal Client Initialization (NEW)
-# ==============================================================================
-# Initialize the OneSignal client globally here, after app.config is set.
-# This ensures it's available throughout your application without re-initializing per request.
-# You might want to wrap this in a try-except block if the keys might be missing.
-try:
-    onesignal_client = Client(
-        app_id=app.config['ONESIGNAL_APP_ID'],
-        rest_api_key=app.config['ONESIGNAL_REST_API_KEY']
-    )
-except Exception as e:
-    app.logger.error(f"Failed to initialize OneSignal client: {e}")
-    onesignal_client = None # Set to None to handle errors gracefully later
+mail = Mail(app)
 
 # ==============================================================================
-# Global  Definitions (UPDATED/NEW)
+# Global Definitions (UPDATED/NEW)
 # ==============================================================================
 
-def get_drive_service():
-    """
-    Authenticates with Google Drive using stored tokens and returns a service object.
-    Assumes initial authorization via /google/authorize and /google/callback has occurred.
-    """
-    creds = None
-    if os.path.exists(app.config['GOOGLE_DRIVE_TOKEN_FILE']):
-        creds = Credentials.from_authorized_user_file(app.config['GOOGLE_DRIVE_TOKEN_FILE'], app.config['GOOGLE_DRIVE_SCOPES'])
+def slugify(s):
+    if not isinstance(s, str):
+        return ""
+    s = s.lower().strip()
+    s = re.sub(r'[^\w\s-]', '', s) # Remove all non-word chars (except spaces and hyphens)
+    s = re.sub(r'[\s_-]+', '-', s)  # Replace spaces and underscores with a single hyphen
+    s = s.strip('-') # Remove leading/trailing hyphens
+    return s
 
-    if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-            # Save the refreshed credentials
-            with open(app.config['GOOGLE_DRIVE_TOKEN_FILE'], 'w') as token:
-                token.write(creds.to_json())
-        else:
-            # This path means no valid tokens or refresh token.
-            # It implies initial authorization is needed or token.json is missing/corrupt.
-            # In a web app, we should redirect to /google/authorize, but for a helper function
-            # used after auth, we raise an error.
-            app.logger.error("No valid Google Drive credentials found. Please run initial authorization.")
-            raise Exception("Google Drive not authorized. Please initiate authorization via /google/authorize.")
-            
-    return build('drive', 'v3', credentials=creds)
+def get_products_data(group_by=None, sort_by=None, sort_order='asc', type_filter='all', search_query=None):
+    products_query = Product.query
 
-def upload_file_to_drive(file_obj, filename, mimetype):
-    """
-    Uploads a file-like object to Google Drive.
-    Returns the webViewLink of the uploaded file on success, None otherwise.
-    """
-    try:
-        service = get_drive_service()
-        file_metadata = {'name': filename}
+    # NEW: Apply search filter first
+    if search_query:
+        products_query = products_query.filter(Product.name.ilike(f'%{search_query}%'))
 
-        # --- MODIFIED: Add parents to file_metadata if GOOGLE_DRIVE_FOLDER_ID is set ---
-        if app.config['GOOGLE_DRIVE_FOLDER_ID']:
-            file_metadata['parents'] = [app.config['GOOGLE_DRIVE_FOLDER_ID']]
-        # --- END MODIFIED ---
-        
-        media = MediaIoBaseUpload(file_obj, mimetype=mimetype, resumable=True)
-        
-        file = service.files().create(
-            body=file_metadata,
-            media_body=media,
-            fields='id, webViewLink'
-        ).execute()
+    # Apply type filter next
+    if type_filter and type_filter != 'all':
+        products_query = products_query.filter_by(type=type_filter)
 
-        # Set permissions to allow anyone with the link to view
-        service.permissions().create(
-            fileId=file.get('id'),
-            body={'type': 'anyone', 'role': 'reader'},
-            fields='id'
-        ).execute()
+    # Apply sorting next
+    if sort_by == 'name':
+        products_query = products_query.order_by(Product.name.asc() if sort_order == 'asc' else Product.name.desc())
+    elif sort_by == 'type':
+        products_query = products_query.order_by(Product.type.asc() if sort_order == 'asc' else Product.type.desc())
+    elif sort_by == 'unit_of_measure':
+        products_query = products_query.order_by(Product.unit_of_measure.asc() if sort_order == 'asc' else Product.unit_of_measure.desc())
+    elif sort_by == 'unit_price':
+        products_query = products_query.order_by(Product.unit_price.asc() if sort_order == 'asc' else Product.unit_price.desc())
+    elif sort_by == 'product_number':
+        if sort_order == 'asc':
+            products_query = products_query.order_by(
+                db.func.CAST(Product.product_number, db.Integer).nullsfirst()
+            )
+        else: # desc
+            products_query = products_query.order_by(
+                db.func.CAST(Product.product_number, db.Integer).nullslast()
+            )
+    else: # Default sort if none of the above are matched
+        products_query = products_query.order_by(Product.type, Product.name)
 
-        app.logger.info(f"File '{filename}' uploaded to Google Drive. Link: {file.get('webViewLink')}")
-        return file.get('webViewLink')
+    all_products = products_query.all()
 
-    except HttpError as error:
-        app.logger.error(f"An error occurred during Google Drive upload: {error}")
-        flash(f"Error uploading document to Google Drive: {error}", 'danger')
-        return None
-    except Exception as e:
-        app.logger.error(f"An unexpected error occurred: {e}", exc_info=True)
-        flash(f"An unexpected error occurred during document upload.", 'danger')
-        return None
+    grouped_products = {}
+
+    # Now apply grouping
+    if group_by == 'type':
+        for product in all_products:
+            grouped_products.setdefault(product.type, []).append(product)
+        # Sort groups by type name
+        grouped_products = dict(sorted(grouped_products.items()))
+    elif group_by == 'location':
+        all_locations = Location.query.order_by(Location.name).all()
+        for location in all_locations:
+            grouped_products[location.name] = []
+        for product in all_products:
+            if not product.locations.all(): # Products with no assigned location
+                grouped_products.setdefault('Unassigned Location', []).append(product)
+            for location in product.locations:
+                grouped_products.setdefault(location.name, []).append(product)
+        # Sort groups by location name
+        grouped_products = dict(sorted(grouped_products.items()))
+    else: # No grouping
+        grouped_products['All Products'] = all_products # A single group
+
+    return grouped_products
+
 
 # Generic list of all possible shift types that can be assigned by a scheduler
 SCHEDULER_SHIFT_TYPES_GENERIC = ['Open', 'Day', 'Night', 'Double A', 'Double B', 'Split Double']
@@ -380,6 +363,226 @@ MANUAL_CONTENT = {
 # Helper Functions & Decorators
 # ==============================================================================
 
+app.jinja_env.filters['slugify'] = slugify
+
+def get_drive_service():
+    """
+    Authenticates with Google Drive/Sheets using stored tokens and returns service objects.
+    Assumes initial authorization via /google/authorize and /google/callback has occurred.
+    Returns a dictionary of services: {'drive': drive_service, 'sheets': sheets_service}.
+    """
+    creds = None
+    if os.path.exists(app.config['GOOGLE_DRIVE_TOKEN_FILE']):
+        creds = Credentials.from_authorized_user_file(app.config['GOOGLE_DRIVE_TOKEN_FILE'], app.config['GOOGLE_DRIVE_SCOPES'])
+
+    if not creds or not creds.valid:
+        if creds and creds.expired and creds.refresh_token:
+            creds.refresh(Request())
+            # Save the refreshed credentials
+            with open(app.config['GOOGLE_DRIVE_TOKEN_FILE'], 'w') as token:
+                token.write(creds.to_json())
+        else:
+            app.logger.error("No valid Google Drive/Sheets credentials found. Please run initial authorization.")
+            raise Exception("Google Drive/Sheets not authorized. Please initiate authorization via /google/authorize.")
+
+    drive_service = build('drive', 'v3', credentials=creds)
+    sheets_service = build('sheets', 'v4', credentials=creds) # NEW: Build Sheets service
+    return {'drive': drive_service, 'sheets': sheets_service} # Return both services
+
+
+# MODIFIED: get_drive_service call in upload_file_to_drive
+
+def upload_file_to_drive(file_obj, filename, mimetype, parent_folder_id=None):
+    """
+    Uploads a file-like object to Google Drive.
+    Returns the webViewLink of the uploaded file on success, None otherwise.
+    If parent_folder_id is provided, the file will be uploaded to that folder.
+    Otherwise, it defaults to app.config['GOOGLE_DRIVE_FOLDER_ID'].
+    """
+    try:
+        services = get_drive_service()
+        service = services['drive']
+
+        file_metadata = {'name': filename}
+
+        target_folder_id = parent_folder_id if parent_folder_id else app.config['GOOGLE_DRIVE_FOLDER_ID']
+        if target_folder_id:
+            file_metadata['parents'] = [target_folder_id]
+        else:
+            app.logger.error("No target_folder_id provided for Google Drive upload.")
+            flash(f"Error uploading document: Google Drive target folder not specified.", 'danger')
+            return None # CRITICAL: Ensure a folder ID exists
+
+        media = MediaIoBaseUpload(file_obj, mimetype=mimetype, resumable=True)
+
+        file = service.files().create(
+            body=file_metadata,
+            media_body=media,
+            fields='id, webViewLink',
+            supportsAllDrives=True
+        ).execute()
+
+        # Permissions to make it publicly readable
+        service.permissions().create(
+            fileId=file.get('id'),
+            body={'type': 'anyone', 'role': 'reader'},
+            fields='id'
+        ).execute()
+
+        app.logger.info(f"File '{filename}' uploaded to Google Drive. Link: {file.get('webViewLink')}")
+        return file.get('webViewLink')
+
+    except HttpError as error:
+        app.logger.error(f"An error occurred during Google Drive upload: {error.resp.status} {error.resp.reason} - {error.content}", exc_info=True)
+        flash(f"Error uploading document to Google Drive: {error.resp.status} - {error.resp.reason}", 'danger')
+        return None
+    except Exception as e:
+        app.logger.error(f"An unexpected error occurred: {e}", exc_info=True)
+        flash(f"An unexpected error occurred during document upload.", 'danger')
+        return None
+
+# NEW HELPER: Function to append EOD data to a Google Sheet
+# Replaces _append_eod_data_to_google_csv
+def _append_eod_data_to_google_sheet(spreadsheet_id, data_row_dict): # REMOVED uploaded_image_links parameter
+    """
+    Appends a row of data to the specified Google Sheet.
+    Automatically adds a header row if the sheet is empty.
+    Assumes 'Image Links' field in data_row_dict is already formatted as a Sheets HYPERLINK formula.
+    Returns the URL of the Google Sheet.
+    """
+    try:
+        services = get_drive_service()
+        sheets_service = services['sheets']
+
+        # Determine if header needs to be added
+        result = sheets_service.spreadsheets().values().get(
+            spreadsheetId=spreadsheet_id, range='A1'
+        ).execute()
+        values = result.get('values', [])
+        sheet_is_empty = not values
+
+        # Construct the row to append based on the ordered keys in data_row_dict
+        row_values = []
+        for key in data_row_dict.keys(): # Iterate over keys to maintain order
+            row_values.append(data_row_dict[key]) # Just append the value directly
+
+        # If sheet is empty, first add the header
+        if sheet_is_empty:
+            header = list(data_row_dict.keys()) # Get the ordered headers
+            body = {'values': [header]}
+            sheets_service.spreadsheets().values().update(
+                spreadsheetId=spreadsheet_id, range='A1',
+                valueInputOption='RAW', body=body # RAW for header strings
+            ).execute()
+            app.logger.info(f"Added header to Google Sheet {spreadsheet_id}.")
+
+        # Append the new data row
+        body = {'values': [row_values]}
+        sheets_service.spreadsheets().values().append(
+            spreadsheetId=spreadsheet_id, range='A:A',
+            valueInputOption='USER_ENTERED', # IMPORTANT: Use USER_ENTERED to parse formulas
+            insertDataOption='INSERT_ROWS', body=body
+        ).execute()
+
+        app.logger.info(f"Appended data to Google Sheet {spreadsheet_id}.")
+        drive_service = services['drive']
+        sheet_metadata = drive_service.files().get(fileId=spreadsheet_id, fields='webViewLink', supportsAllDrives=True).execute()
+        return sheet_metadata.get('webViewLink')
+
+    except Exception as e:
+        app.logger.error(f"An unexpected error occurred during Google Sheets API operation: {e}", exc_info=True)
+        return None
+
+
+# MODIFIED: Function to send the EOD report email
+def send_eod_report_email(report_data, manager_name, image_links, recipient_emails, eod_sheet_link=None, drive_folder_link=None, personal_email_copy=None):
+    """
+    Sends an HTML formatted email of the EOD report, including links to uploaded images,
+    the Google Sheet, and the Google Drive folder.
+    """
+    try:
+        msg = Message("End of Day Report - " + report_data.report_date.strftime('%Y-%m-%d'),
+                      sender=app.config['MAIL_DEFAULT_SENDER'])
+
+        to_recipients = list(recipient_emails)
+        if personal_email_copy and personal_email_copy not in to_recipients:
+            to_recipients.append(personal_email_copy)
+        msg.recipients = to_recipients
+
+        # Build HTML content for the email
+        html_body = f"""
+        <html>
+        <head></head>
+        <body>
+            <h3>End of Day Report for {report_data.report_date.strftime('%Y-%m-%d')}</h3>
+            <p><strong>Manager:</strong> {manager_name}</p>
+            <hr>
+
+            <h4>Operational Checks</h4>
+            <ul>
+                <li><strong>Gas Ordered:</strong> {'Yes' if report_data.gas_ordered else 'No'}</li>
+                <li><strong>Garnish Ordered:</strong> {'Yes' if report_data.garnish_ordered else 'No'}</li>
+                <li><strong>Maintenance Issues:</strong> {report_data.maintenance_issues or 'None'}</li>
+                <li><strong>Staff Pitched / Absences:</strong> {report_data.staff_pitched_absences or 'None'}</li>
+                <li><strong>Staff Deductions:</strong> {report_data.staff_deductions or 'None'}</li>
+                <li><strong>Stock Borrowed/Lent:</strong> {report_data.stock_borrowed_lent or 'None'}</li>
+                <li><strong>Customer Complaints:</strong> {report_data.customer_complaints or 'None'}</li>
+                <li><strong>Customer Complaint Contact:</strong> {report_data.customer_complaint_contact_no or 'N/A'}</li>
+            </ul>
+
+            <h4>Closing Checks</h4>
+            <ul>
+                <li><strong>Shop Phone On Charge:</strong> {'Yes' if report_data.shop_phone_on_charge else 'No'}</li>
+                <li><strong>TV Boxes Locked:</strong> {'Yes' if report_data.tv_boxes_locked else 'No'}</li>
+                <li><strong>All Equipment Switched Off:</strong> {'Yes' if report_data.all_equipment_switched_off else 'No'}</li>
+            </ul>
+
+            <h4>Financials</h4>
+            <ul>
+                <li><strong>Credit Card Machines Banked:</strong> {'Yes' if report_data.credit_card_machines_banked else 'No'}</li>
+                <li><strong>Card Machines On Charge:</strong> {'Yes' if report_data.card_machines_on_charge else 'No'}</li>
+                <li><strong>Declared Card Sales (POS360):</strong> {report_data.declare_card_sales_pos360 or 'N/A'}</li>
+                <li><strong>Actual Card Figure Banked:</strong> {report_data.actual_card_figure_banked or 'N/A'}</li>
+                <li><strong>Declared Cash Sales (POS360):</strong> {report_data.declare_cash_sales_pos360 or 'N/A'}</li>
+                <li><strong>Actual Cash On Hand:</strong> {report_data.actual_cash_on_hand or 'N/A'}</li>
+                <li><strong>Accounts Amount:</strong> {report_data.accounts_amount or 'None'}</li>
+                <li><strong>Stock Wastage Value:</strong> {report_data.stock_wastage_value or 'None'}</li>
+            </ul>
+
+            <h4>Daily Performance & Security</h4>
+            <ul>
+                <li><strong>POS360 Day End Complete:</strong> {'Yes' if report_data.pos360_day_end_complete else 'No'}</li>
+                <li><strong>Today's Target:</strong> {report_data.todays_target or 'N/A'}</li>
+                <li><strong>Turnover (ex TIPS):</strong> {report_data.turnover_ex_tips or 'N/A'}</li>
+                <li><strong>Security Walk Through:</strong> {'Yes' if report_data.security_walk_through_clean_shop else 'No'}</li>
+                <li><strong>Other Issues Experienced:</strong> {report_data.other_issues_experienced or 'None'}</li>
+            </ul>
+
+            {"<h4>Card Batch Pictures (" + str(len(image_links)) + ")</h4>" if image_links else ""}
+            {"" if not image_links else "<ul>" + "".join([f"<li><a href='{link.image_url}' target='_blank'>{link.filename or f'Image {i+1}'}</a></li>" for i, link in enumerate(image_links)]) + "</ul>"}
+
+            <hr>
+            <h4>Report Links</h4>
+            <ul>
+                {f"<li><a href='https://docs.google.com/spreadsheets/d/1u4JCET3_Cu8c1NKaDJy05VvFxoFRzXBOtDcDOFBczfo/edit?usp=drive_link' target='_blank'>View Full Report in Google Sheet</a></li>"}
+                {f"<li><a href='https://drive.google.com/drive/folders/1udZ-tksPhs04gsxZs3bRhfP_xDInCtxO?usp=sharing' target='_blank'>View Google Drive Folder for EOD Reports</a></li>"}
+            </ul>
+
+
+
+            <p>Report generated by the Goat and Co. Inventory Management & Scheduling System.</p>
+        </body>
+        </html>
+        """
+        msg.html = html_body
+        mail.send(msg)
+        app.logger.info(f"EOD report for {report_data.report_date} sent to {', '.join(msg.recipients)}")
+        return True
+    except Exception as e:
+        app.logger.error(f"Error sending EOD report email: {e}", exc_info=True)
+        flash(f"Failed to send email copy of the report: {e}", 'danger')
+        return False
+
 SCHEDULER_SHIFT_TYPES = ['Day', 'Night', 'Double', 'Open', 'Split Double'] # ADDED 'Open', 'Split Double'
 STAFF_SUBMISSION_SHIFT_TYPES = ['Day', 'Night', 'Double'] # Staff only submit for standard types
 
@@ -395,7 +598,7 @@ def _render_scheduler_for_role(role_name, role_label):
         users_in_role_query = User.query.join(User.roles).filter(
             or_(Role.name == 'manager'),
             User.is_suspended == False
-        )
+            )
 
     users = users_in_role_query.order_by(User.full_name).all()
 
@@ -486,6 +689,83 @@ def _render_scheduler_for_role(role_name, role_label):
         staffing_status=staffing_status
     )
 
+def _process_schedule_post_request(role_name, request_form):
+    start_of_week, week_dates, end_of_week, _ = _build_week_dates()
+
+    # Determine which users belong to this role (including managers, GMs, system_admins for 'manager' role)
+    users_in_role_query = User.query.join(User.roles).filter(User.is_suspended == False)
+    if role_name == 'manager':
+        users_in_role_query = users_in_role_query.filter(
+            or_(Role.name == 'manager', Role.name == 'general_manager', Role.name == 'system_admin')
+        )
+    else:
+        users_in_role_query = users_in_role_query.filter(Role.name == role_name)
+
+    users_in_role = users_in_role_query.all()
+    user_ids_in_role = [u.id for u in users_in_role]
+
+    try:
+        # Delete existing published shifts for this role and week before saving new ones
+        Schedule.query.filter(
+            Schedule.shift_date >= start_of_week,
+            Schedule.shift_date <= end_of_week,
+            Schedule.user_id.in_(user_ids_in_role) if user_ids_in_role else False
+        ).delete(synchronize_session=False)
+        db.session.flush()
+
+        for user in users_in_role:
+            for day in week_dates:
+                assigned_shift_type = request_form.get(f'assignment_{day.isoformat()}_{user.id}')
+
+                if assigned_shift_type and assigned_shift_type != "":
+                    start_time_str = None
+                    end_time_str = None
+
+                    # These shift types require custom time input (ensure they are validated if required)
+                    # We use the generic SCHEDULER_SHIFT_TYPES_GENERIC list for validation against custom types
+                    if assigned_shift_type in SCHEDULER_SHIFT_TYPES_GENERIC: # Check against the full list
+                        # Dynamically get defined shifts for the specific role and day
+                        day_name = day.strftime('%A')
+                        role_specific_shift_types = get_role_specific_shift_types(role_name, day_name)
+
+                        if assigned_shift_type in role_specific_shift_types and \
+                            (ROLE_SHIFT_DEFINITIONS.get(role_name, {}).get(day_name, ROLE_SHIFT_DEFINITIONS.get(role_name, {}).get('default', {})).get(assigned_shift_type, {}).get('start') == 'Specified by Scheduler' or
+                             ROLE_SHIFT_DEFINITIONS.get(role_name, {}).get(day_name, ROLE_SHIFT_DEFINITIONS.get(role_name, {}).get('default', {})).get(assigned_shift_type, {}).get('end') == 'Specified by Scheduler'):
+
+                            start_time_str = request_form.get(f'assignment_{day.isoformat()}_{user.id}_start_time')
+                            end_time_str = request_form.get(f'assignment_{day.isoformat()}_{user.id}_end_time')
+
+                            if not start_time_str or not end_time_str:
+                                # Flash message already handled by client-side validation, but good for backend too
+                                flash(f"Start and End times are required for {assigned_shift_type} on {day.strftime('%a, %b %d')} for {user.full_name}.", 'danger')
+                                raise ValueError("Custom shift times missing")
+
+                    s = Schedule(
+                        shift_date=day,
+                        assigned_shift=assigned_shift_type,
+                        user_id=user.id,
+                        published=(request_form.get('action') == 'publish'),
+                        start_time_str=start_time_str,
+                        end_time_str=end_time_str
+                    )
+                    db.session.add(s)
+
+        db.session.commit()
+        if request_form.get('action') == 'publish':
+            flash(f'{role_name.title()} schedule saved and published.', 'success')
+        else:
+            flash(f'{role_name.title()} schedule draft saved.', 'info')
+        return True # Indicate success
+    except ValueError as ve:
+        db.session.rollback()
+        flash(f'Failed to save {role_name} schedule: {ve}', 'danger')
+        return False # Indicate failure
+    except Exception as e:
+        db.session.rollback()
+        flash(f'Failed to save {role_name} schedule: {e}', 'danger')
+        app.logger.exception(f"Error saving {role_name} schedule.")
+        return False # Indicate failure
+
 def _calculate_ingredient_usage_from_cocktails_sold(target_date):
     """
     Calculates the total quantity of each product used as ingredients for cocktails
@@ -514,10 +794,10 @@ def _calculate_ingredient_usage_from_cocktails_sold(target_date):
             # Calculate total quantity of this ingredient used
             # = (quantity of this ingredient per cocktail) * (number of cocktails sold)
             quantity_used_per_product = recipe_ingredient.quantity * cocktail_sold.quantity_sold
-            
+
             total_ingredient_usage.setdefault(product_id, 0.0)
             total_ingredient_usage[product_id] += quantity_used_per_product
-            
+
     return total_ingredient_usage
 
 @login_manager.user_loader
@@ -544,26 +824,26 @@ def inject_global_data():
         global_data['all_locations'] = Location.query.order_by(Location.name).all()
         if current_user.is_authenticated:
             user_roles_ids = [role.id for role in current_user.roles]
-            
+
             # Query for announcements that are either:
             # 1. Not targeted to any specific role
             # 2. Targeted to one of the current_user's roles
             filtered_announcements_query = Announcement.query.outerjoin(Announcement.target_roles) \
                                                           .filter(or_(
-                                                              db.not_(Announcement.target_roles.any()), 
+                                                              db.not_(Announcement.target_roles.any()),
                                                               Role.id.in_(user_roles_ids)
                                                           )) \
                                                           .distinct()
-            
+
             recent_announcements_filtered = filtered_announcements_query.order_by(Announcement.id.desc()).limit(5).all()
 
             seen_ids = [a.id for a in current_user.seen_announcements.all()]
             unread_count = sum(1 for a in recent_announcements_filtered if a.id not in seen_ids)
-            
+
             global_data['recent_announcements'] = recent_announcements_filtered
             global_data['unread_announcements_count'] = unread_count
 
-    except Exception as e: 
+    except Exception as e:
         app.logger.error(f"Error in inject_global_data: {e}", exc_info=True)
         global_data['all_locations'] = []
         if current_user.is_authenticated:
@@ -578,11 +858,29 @@ def log_activity(action):
         db.session.add(log_entry)
 
 @app.template_filter('to_local_time')
-def to_local_time_filter(utc_dt, fmt="%Y-%m-%d @ %H:%M:%S"):
-    """Converts a UTC datetime object to local time (+2h) and formats it."""
-    if utc_dt is None:
+def to_local_time_filter(utc_dt_str, fmt="%Y-%m-%d @ %H:%M:%S"):
+    """
+    Converts a UTC datetime string (ISO format) to local time (+2h) and formats it.
+    The input `utc_dt_str` is expected to be an ISO-formatted string.
+    """
+    if utc_dt_str is None:
         return "N/A"
-    from datetime import timedelta
+
+    from datetime import datetime, timedelta
+
+    try:
+        # Convert the ISO formatted string back to a datetime object
+        utc_dt = datetime.fromisoformat(utc_dt_str)
+    except ValueError:
+        # Handle cases where the string might not be in the expected ISO format
+        # or if it's already a datetime object (though the route passes strings)
+        # As a fallback, try to parse it as a simple date if it fails isoformat
+        try:
+            utc_dt = datetime.strptime(utc_dt_str, '%Y-%m-%d')
+        except ValueError:
+            return "Invalid Date/Time Format"
+
+
     local_dt = utc_dt + timedelta(hours=2)
     return local_dt.strftime(fmt)
 
@@ -597,7 +895,7 @@ def get_week_dates():
     # weekday() returns 0 for Monday, 1 for Tuesday, ..., 6 for Sunday
     days_since_monday = today.weekday()
     start_of_week = today - timedelta(days=days_since_monday)
-    
+
     # Generate the 7 dates from this Monday
     return [start_of_week + timedelta(days=i) for i in range(7)]
 
@@ -614,10 +912,10 @@ def before_request_handler():
             current_user.suspension_document_path = None # Clear document path on auto-reinstatement
             db_changed = True
             flash('Your suspension period has ended. Full access has been restored.', 'info')
-        
+
         # Suspension Access Control (existing logic)
         if current_user.is_suspended:
-            allowed_endpoints = ['dashboard', 'logout', 'static'] 
+            allowed_endpoints = ['dashboard', 'logout', 'static']
 
             if current_user.suspension_end_date:
                 reinstatement_preview_date = current_user.suspension_end_date - timedelta(days=2)
@@ -639,13 +937,13 @@ def before_request_handler():
             logout_user()
             flash('You have been logged out by an administrator.', 'warning')
             return redirect(url_for('login'))
-        
+
         # --- NEW: Availability Submission Window Notifications ---
         # Only check for staff roles who submit availability
-        if (current_user.has_role('bartender') or current_user.has_role('waiter') or current_user.has_role('skullers')) and request.endpoint not in ['static', 'logout']:
+        if (current_user.has_role('bartender') or current_user.has_role('waiter') or current_user.has_role('skullers')) and request.endpoint not in ['static', 'logout', 'submit_shifts']:
+            # The submit_shifts page handles its own notifications with the live timer
             current_time = datetime.now()
 
-            # Recalculate submission window boundaries
             current_date_for_window_calc = current_time.date()
             days_since_monday = current_date_for_window_calc.weekday()
             current_monday_date = current_date_for_window_calc - timedelta(days=days_since_monday)
@@ -693,11 +991,86 @@ def before_request_handler():
 # Database Models
 # ==============================================================================
 
+class Warning(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False) # Staff member receiving the warning
+    issued_by_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False) # Manager who issued the warning
+    date_issued = db.Column(db.Date, nullable=False, default=datetime.utcnow().date)
+    reason = db.Column(db.Text, nullable=False)
+    severity = db.Column(db.String(50), nullable=False, default='Minor') # e.g., 'Minor', 'Major', 'Critical'
+    status = db.Column(db.String(50), nullable=False, default='Active') # e.g., 'Active', 'Resolved', 'Expired'
+    notes = db.Column(db.Text, nullable=True) # Internal manager notes
+    resolution_date = db.Column(db.Date, nullable=True)
+    resolved_by_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True) # Manager who resolved it
+    timestamp = db.Column(db.DateTime, nullable=False, default=datetime.utcnow) # When the warning was created
+
+    # Relationships
+    user = db.relationship('User', foreign_keys=[user_id], backref=db.backref('warnings_received', lazy=True))
+    issued_by = db.relationship('User', foreign_keys=[issued_by_id], backref=db.backref('warnings_issued', lazy=True))
+    resolved_by = db.relationship('User', foreign_keys=[resolved_by_id], backref=db.backref('warnings_resolved', lazy=True))
+
+    __table_args__ = {'extend_existing': True}
+
+class EndOfDayReport(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    report_date = db.Column(db.Date, nullable=False, default=datetime.utcnow().date, unique=True) # One report per day
+    manager_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False) # Manager who submitted the report
+
+    # Operational Checks
+    gas_ordered = db.Column(db.Boolean, nullable=True) # Yes/No
+    garnish_ordered = db.Column(db.Boolean, nullable=True) # Yes/No
+    maintenance_issues = db.Column(db.Text, nullable=True)
+    staff_pitched_absences = db.Column(db.Text, nullable=True)
+    staff_deductions = db.Column(db.Text, nullable=True)
+    stock_borrowed_lent = db.Column(db.Text, nullable=True) # Will store notes or links to announcements
+    customer_complaints = db.Column(db.Text, nullable=True)
+    customer_complaint_contact_no = db.Column(db.Text, nullable=True) # Sub-line: Where possible, collect the customers' details and invite them back
+
+    # Closing Checks
+    shop_phone_on_charge = db.Column(db.Boolean, nullable=True) # Yes/No
+    tv_boxes_locked = db.Column(db.Boolean, nullable=True) # Yes/No
+    all_equipment_switched_off = db.Column(db.Boolean, nullable=True) # Yes/No
+
+    # Financials
+    credit_card_machines_banked = db.Column(db.Boolean, nullable=True) # Yes/No
+    card_machines_on_charge = db.Column(db.Boolean, nullable=True) # Yes/No
+    declare_card_sales_pos360 = db.Column(db.String(100), nullable=True) # Text field for the declared amount
+    actual_card_figure_banked = db.Column(db.String(100), nullable=True) # Text field for actual amount
+    declare_cash_sales_pos360 = db.Column(db.String(100), nullable=True) # Text field for declared amount
+    actual_cash_on_hand = db.Column(db.String(100), nullable=True) # Text field for actual amount
+    accounts_amount = db.Column(db.Text, nullable=True) # Multi-line text for (per account)
+    stock_wastage_value = db.Column(db.Text, nullable=True) # Notes down any stock wastage and the value thereof
+
+    # Daily Performance & Security
+    pos360_day_end_complete = db.Column(db.Boolean, nullable=True) # Yes/No
+    todays_target = db.Column(db.String(255), nullable=True) # Text input field
+    turnover_ex_tips = db.Column(db.String(255), nullable=True) # Text input field
+    security_walk_through_clean_shop = db.Column(db.Boolean, nullable=True) # Yes/No
+    other_issues_experienced = db.Column(db.Text, nullable=True)
+
+    # Email Copy Option
+    email_copy_address = db.Column(db.String(255), nullable=True) # Open field for email address
+
+    # Relationships
+    manager = db.relationship('User', backref=db.backref('eod_reports', lazy=True))
+    images = db.relationship('EndOfDayReportImage', backref='eod_report', lazy=True, cascade="all, delete-orphan")
+
+    __table_args__ = {'extend_existing': True}
+
+
+# NEW MODEL: EndOfDayReportImage (for multiple image uploads)
+class EndOfDayReportImage(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    eod_report_id = db.Column(db.Integer, db.ForeignKey('end_of_day_report.id'), nullable=False)
+    image_url = db.Column(db.String(500), nullable=False) # Google Drive webViewLink
+    filename = db.Column(db.String(255), nullable=True) # Original filename for reference
+
+
 class RecountRequest(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     product_id = db.Column(db.Integer, db.ForeignKey('product.id'), nullable=True) # For product-specific recount
     location_id = db.Column(db.Integer, db.ForeignKey('location.id'), nullable=True) # For location-specific recount
-    
+
     # Must specify either product_id OR location_id
     __table_args__ = (db.CheckConstraint('product_id IS NOT NULL OR location_id IS NOT NULL', name='product_or_location_required'),)
 
@@ -705,7 +1078,7 @@ class RecountRequest(db.Model):
     request_date = db.Column(db.Date, nullable=False, default=datetime.utcnow().date)
     status = db.Column(db.String(20), nullable=False, default='Pending') # Pending, Completed, Cancelled
     timestamp = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
-    
+
     # Relationships for convenience
     product = db.relationship('Product', backref=db.backref('recount_requests', lazy=True))
     location = db.relationship('Location', backref=db.backref('recount_requests', lazy=True))
@@ -746,16 +1119,7 @@ def _build_week_dates():
 
     return start_of_week, week_dates, end_of_week, leave_dict
 
-# Example modification for PushSubscription (if you want to track OneSignal IDs)
-class PushSubscription(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
-    onesignal_player_id = db.Column(db.String(255), unique=True, nullable=True) # New field
-    # endpoint, p256dh, auth might become optional or removed if fully relying on OneSignal
-    # For now, keep them if you're mixing direct webpush with OneSignal or for flexibility.
-    timestamp = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
 
-    user = db.relationship('User', backref=db.backref('push_subscriptions', lazy=True, cascade="all, delete-orphan"))
 
 class VarianceExplanation(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -833,14 +1197,13 @@ class User(db.Model, UserMixin):
     force_logout_requested = db.Column(db.Boolean, default=False)
     is_suspended = db.Column(db.Boolean, default=False, nullable=False)
     suspension_end_date = db.Column(db.Date, nullable=True)
-    # --- NEW FIELD ---
-    suspension_document_path = db.Column(db.String(255), nullable=True) # Path to the uploaded document
-    # --- END NEW FIELD ---
+    suspension_document_path = db.Column(db.String(255), nullable=True)
+    email = db.Column(db.String(255), nullable=True) # NEW: Email field
     roles = db.relationship('Role', secondary=user_roles, backref=db.backref('users', lazy='dynamic'))
     counts = db.relationship('Count', backref='user', lazy=True)
     announcements = db.relationship('Announcement', backref='user', lazy=True)
     seen_announcements = db.relationship('Announcement', secondary=announcement_view, back_populates='viewers', lazy='dynamic')
-    
+
     @property
     def role_names(self):
         return [role.name for role in self.roles]
@@ -860,7 +1223,7 @@ class Product(db.Model):
     unit_of_measure = db.Column(db.String(10), nullable=False)
     unit_price = db.Column(db.Float, nullable=True)
     # NEW: Add product_number field
-    product_number = db.Column(db.String(50)) 
+    product_number = db.Column(db.String(50))
     counts = db.relationship('Count', backref='product', lazy=True, cascade="all, delete-orphan")
     locations = db.relationship('Location', secondary=product_location, back_populates='products', lazy='dynamic')
 
@@ -873,7 +1236,7 @@ class Announcement(db.Model):
     timestamp = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
     viewers = db.relationship('User', secondary=announcement_view, back_populates='seen_announcements', lazy='dynamic')
     target_roles = db.relationship('Role', secondary=announcement_roles, backref=db.backref('targeted_announcements', lazy='dynamic'))
-    
+
     # --- NEW FIELD ---
     action_link = db.Column(db.String(255), nullable=True) # URL endpoint for actionable announcements
     # --- END NEW FIELD ---
@@ -903,7 +1266,7 @@ class Sale(db.Model):
     product_id = db.Column(db.Integer, db.ForeignKey('product.id'), nullable=False)
     quantity_sold = db.Column(db.Float, nullable=False)
     date = db.Column(db.Date, nullable=False, default=datetime.utcnow().date)
-    product = db.relationship('Product', backref=db.backref('sale_entries', lazy=True))    
+    product = db.relationship('Product', backref=db.backref('sale_entries', lazy=True))
 
 class ActivityLog(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -956,7 +1319,7 @@ class ShiftSwapRequest(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     schedule_id = db.Column(db.Integer, db.ForeignKey('schedule.id'), nullable=False)
     requester_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
-    coverer_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True) 
+    coverer_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
     status = db.Column(db.String(20), nullable=False, default='Pending')
     timestamp = db.Column(db.DateTime, default=datetime.utcnow)
     schedule = db.relationship('Schedule', backref='swap_requests')
@@ -981,26 +1344,26 @@ volunteered_shift_candidates = db.Table('volunteered_shift_candidates',
 
 class VolunteeredShift(db.Model):
     id = db.Column(db.Integer, primary_key=True)
-    
+
     # Original shift that the user wants to give up
     schedule_id = db.Column(db.Integer, db.ForeignKey('schedule.id'), nullable=False, unique=True)
-    
+
     # User who is giving up the shift
     requester_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
-    
+
     # Status of the volunteering cycle: 'Open', 'PendingApproval', 'Approved', 'Cancelled'
     status = db.Column(db.String(20), nullable=False, default='Open')
-    
+
     # Who ultimately got the shift (if approved)
     approved_volunteer_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
-    
+
     timestamp = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
 
     # Relationships
     schedule = db.relationship('Schedule', backref=db.backref('volunteered_cycle', uselist=False, cascade="all, delete-orphan", lazy=True))
     requester = db.relationship('User', foreign_keys=[requester_id], backref=db.backref('shifts_relinquished', lazy=True))
     approved_volunteer = db.relationship('User', foreign_keys=[approved_volunteer_id], backref=db.backref('shifts_volunteered_approved', lazy=True))
-    
+
     # Many-to-many relationship for users who have volunteered for this shift
     volunteers = db.relationship('User', secondary=volunteered_shift_candidates, backref=db.backref('shifts_volunteered_for', lazy='dynamic'))
 
@@ -1015,22 +1378,22 @@ def manage_volunteered_shifts():
     actionable_volunteered_shifts_raw = VolunteeredShift.query.filter(
         VolunteeredShift.status.in_(['Open', 'PendingApproval'])
     ).order_by(VolunteeredShift.timestamp.desc()).all()
-    
+
     processed_actionable_shifts = []
     for v_shift in actionable_volunteered_shifts_raw:
         # Pre-filter volunteers based on role matching here in Python
         requester_roles = v_shift.requester.role_names # Get requester's roles
-        
+
         eligible_volunteers_for_dropdown = []
         for volunteer_user in v_shift.volunteers: # Iterate actual volunteers for this shift
             volunteer_roles = volunteer_user.role_names
-            
+
             # Check if volunteer has at least one matching role with the requester
             has_matching_role = any(role in requester_roles for role in volunteer_roles)
-            
+
             if has_matching_role:
                 eligible_volunteers_for_dropdown.append(volunteer_user)
-        
+
         # Append the processed shift data
         processed_actionable_shifts.append({
             'v_shift': v_shift,
@@ -1058,11 +1421,11 @@ def approve_volunteer():
         return redirect(url_for('manage_volunteered_shifts'))
 
     v_shift = VolunteeredShift.query.get_or_404(volunteered_shift_id)
-    
+
     # Pre-fetch relevant objects for notifications and updates
     original_schedule_item = v_shift.schedule
     requester = v_shift.requester
-    
+
     # Safety check for original_schedule_item
     if original_schedule_item is None:
         app.logger.error(f"VolunteeredShift ID {v_shift.id} has no associated Schedule. Data inconsistency!")
@@ -1078,15 +1441,15 @@ def approve_volunteer():
         if not approved_volunteer_id:
             flash('You must select a volunteer to approve.', 'danger')
             return redirect(url_for('manage_volunteered_shifts'))
-        
+
         approved_volunteer = User.query.get(approved_volunteer_id)
         if not approved_volunteer:
             flash('Selected volunteer not found.', 'danger')
             return redirect(url_for('manage_volunteered_shifts'))
-        
+
         # 1. Update the original Schedule entry
         original_schedule_item.user_id = approved_volunteer.id
-        
+
         # --- Apply "Day + Night = Double" logic for the approved volunteer ---
         # Get approved_volunteer's *other* shifts for that day
         volunteers_other_shifts_that_day = Schedule.query.filter(
@@ -1094,10 +1457,10 @@ def approve_volunteer():
             Schedule.shift_date == original_schedule_item.shift_date,
             Schedule.id != original_schedule_item.id # Exclude the current schedule_item being modified
         ).all()
-        
+
         current_volunteer_shifts_on_day = {s.assigned_shift for s in volunteers_other_shifts_that_day}
         current_volunteer_shifts_on_day.add(original_schedule_item.assigned_shift) # Add the shift being assigned
-        
+
         if 'Day' in current_volunteer_shifts_on_day and 'Night' in current_volunteer_shifts_on_day:
             original_schedule_item.assigned_shift = 'Double' # Consolidate
             # Delete conflicting individual shifts for the volunteer if a Double is now formed
@@ -1111,7 +1474,7 @@ def approve_volunteer():
         # 2. Update the VolunteeredShift status
         v_shift.status = 'Approved'
         v_shift.approved_volunteer_id = approved_volunteer.id
-        
+
         db.session.commit() # Commit changes to schedule and v_shift status
 
         # 3. Notify everyone
@@ -1124,7 +1487,7 @@ def approve_volunteer():
         flash(f"Your relinquished shift on {shift_date_str} has been taken by {approved_volunteer.full_name}.", 'info')
         # Notify approved volunteer
         flash(f"You have been assigned the {original_schedule_item.assigned_shift} shift on {shift_date_str}, originally relinquished by {requester.full_name}.", 'success')
-        
+
         # General announcement for all managers and volunteers
         general_announcement = Announcement(
             user_id=current_user.id, # Manager who approved
@@ -1142,9 +1505,9 @@ def approve_volunteer():
     elif action == 'Cancel':
         v_shift.status = 'Cancelled'
         # No change to original_schedule_item needed, as it was never unassigned.
-        
+
         db.session.commit() # Commit status change
-        
+
         # Notify original requester and any volunteers
         notification_message_base = (
             f"The volunteering cycle for the {original_schedule_item.assigned_shift} shift on {shift_date_str}, "
@@ -1152,7 +1515,7 @@ def approve_volunteer():
         )
         # Notify original requester
         flash(f"Your relinquished shift on {shift_date_str} has had its volunteering cycle cancelled.", 'warning')
-        
+
         # General announcement for managers and potentially volunteers
         general_announcement = Announcement(
             user_id=current_user.id, # Manager who cancelled
@@ -1228,7 +1591,7 @@ def bookings():
         booking_date_str = request.form.get('booking_date')
         booking_time = request.form.get('booking_time')
         notes = request.form.get('notes')
-        
+
         try:
             booking_date = datetime.strptime(booking_date_str, '%Y-%m-%d').date()
         except ValueError:
@@ -1280,7 +1643,7 @@ def edit_booking(booking_id):
         booking.booking_time = request.form.get('booking_time')
         booking.notes = request.form.get('notes')
         booking.status = request.form.get('status')
-        
+
         try:
             booking.booking_date = datetime.strptime(booking_date_str, '%Y-%m-%d').date()
         except ValueError:
@@ -1335,7 +1698,7 @@ def dashboard():
             for s in current_user_scheduled_shifts_raw
         }
         # --- END MODIFIED ---
-        
+
         current_user_roles = current_user.role_names
 
         for v_shift in all_open_volunteered_shifts:
@@ -1349,7 +1712,7 @@ def dashboard():
 
             shift_date_iso = v_shift.schedule.shift_date.isoformat()
             assigned_shifts_on_day = current_user_schedule_this_week.get(shift_date_iso, set())
-            
+
             conflict = False
             requested_shift_type = v_shift.schedule.assigned_shift
 
@@ -1359,7 +1722,7 @@ def dashboard():
             else:
                 if 'Double' in assigned_shifts_on_day or requested_shift_type in assigned_shifts_on_day:
                     conflict = True
-            
+
             already_volunteered = any(v.id == current_user.id for v in v_shift.volunteers)
 
             if not conflict and not already_volunteered:
@@ -1397,11 +1760,11 @@ def dashboard():
                 status = 'corrected' if latest_count.count_type == 'Corrections Count' else 'counted'
             location_statuses.append({'location_obj': loc, 'status': status})
 
-    return render_template('dashboard.html', 
-                           latest_announcement=latest_announcement, 
-                           location_statuses=location_statuses, 
+    return render_template('dashboard.html',
+                           latest_announcement=latest_announcement,
+                           location_statuses=location_statuses,
                            bod_submitted=bod_submitted,
-                           activity_logs=activity_logs, 
+                           activity_logs=activity_logs,
                            variance_alerts=variance_alerts,
                            password_reset_requests=password_reset_requests,
                            open_shifts_for_volunteering=open_shifts_for_volunteering)
@@ -1461,65 +1824,6 @@ def announcements():
 
         log_activity(f"Posted new announcement titled: '{title}' targeting roles: {', '.join([r.name for r in new_announcement.target_roles]) if new_announcement.target_roles else 'All Eligible'}. Action link: {action_link_url or 'None'}.")
 
-        # --- NEW/MODIFIED: Send Push Notifications using OneSignal SDK ---
-        # Make sure you have app.config['ONESIGNAL_APP_ID'] and app.config['ONESIGNAL_REST_API_KEY'] defined
-        from onesignal_sdk.client import Client
-        onesignal_client = Client(app_id=app.config['ONESIGNAL_APP_ID'], rest_api_key=app.config['ONESIGNAL_REST_API_KEY'])
-
-        push_payload = {
-            "headings": {"en": new_announcement.title},
-            "contents": {"en": new_announcement.message},
-            "url": url_for('announcements', _external=True) # Default click URL
-        }
-        if new_announcement.action_link:
-            push_payload['url'] = new_announcement.action_link # If it's an external link, use it directly
-
-        eligible_user_ids = []
-        if new_announcement.target_roles:
-            target_role_ids = [role.id for role in new_announcement.target_roles]
-            eligible_users_for_push = User.query.join(User.roles).filter(
-                Role.id.in_(target_role_ids),
-                User.is_suspended == False
-            ).distinct().all()
-        else:
-            # If not targeted, send to all non-suspended staff/managerial roles
-            all_staff_manager_roles = ['bartender', 'waiter', 'skullers', 'manager', 'general_manager', 'scheduler', 'system_admin']
-            eligible_users_for_push = User.query.join(User.roles).filter(
-                Role.name.in_(all_staff_manager_roles),
-                User.is_suspended == False
-            ).distinct().all()
-
-        # Collect external_user_ids (which map to your User.id) for OneSignal targeting
-        external_user_ids_to_notify = [str(u.id) for u in eligible_users_for_push]
-
-        if external_user_ids_to_notify:
-            push_payload['include_external_user_ids'] = external_user_ids_to_notify
-        else:
-            # If no specific users are targeted, you might choose to send to a segment like 'All'
-            # Or skip sending push if there are no eligible users.
-            # For this example, if no external_user_ids, we will not send to prevent sending to everyone accidentally.
-            flash('Announcement posted, but no eligible users to send push notification to.', 'info')
-            return redirect(url_for('announcements'))
-
-
-        try:
-            onesignal_response = onesignal_client.send_notification(push_payload)
-            # --- CORRECTED LINE ---
-            # Check for the 'id' attribute directly on the response object
-            if hasattr(onesignal_response, 'id') and onesignal_response.id:
-                flash(f'Announcement posted and push notifications sent via OneSignal!', 'success')
-                log_activity(f"Sent OneSignal push notification for announcement: '{new_announcement.title}'.")
-            else:
-                flash(f'Announcement posted, but OneSignal push notifications failed to send. Check logs and OneSignal dashboard.', 'warning')
-                # The response object can be printed directly for debugging
-                app.logger.error(f"OneSignal push failed: {onesignal_response.body}")
-
-        except Exception as e:
-            app.logger.error(f"Error sending OneSignal push notification: {e}", exc_info=True)
-            flash(f'Announcement posted, but an error occurred sending push notifications: {e}', 'danger')
-
-        # --- END NEW/MODIFIED: Send Push Notifications ---
-
         return redirect(url_for('announcements'))
 
     user_roles_ids = [role.id for role in current_user.roles]
@@ -1551,6 +1855,417 @@ def delete_announcement(announcement_id):
     db.session.commit()
     flash('Announcement has been successfully deleted.', 'success')
     return redirect(url_for('announcements'))
+
+# ==============================================================================
+# Manager-Specific Routes (New EOD Report)
+# ==============================================================================
+
+@app.route('/warnings/add', methods=['GET', 'POST'])
+@login_required
+@role_required(['manager', 'general_manager', 'system_admin'])
+def add_warning():
+    # Only allow managers to warn staff roles (bartender, waiter, skullers)
+    staff_roles_allowed_to_warn = ['bartender', 'waiter', 'skullers']
+    all_staff_users = User.query.join(User.roles).filter(
+        Role.name.in_(staff_roles_allowed_to_warn),
+        User.is_suspended == False
+    ).order_by(User.full_name).all()
+
+    # Categorize staff for the dropdown filtering
+    boh_staff = []
+    foh_staff = []
+    
+    for user in all_staff_users:
+        user_roles = [role.name for role in user.roles]
+        if any(role in ['bartender', 'skullers'] for role in user_roles):
+            boh_staff.append(user)
+        if any(role in ['waiter'] for role in user_roles):
+            foh_staff.append(user)
+    
+    # Remove duplicates if a user is both BOH and FOH (e.g., a waiter who also helps skull)
+    # For now, append to both if they have roles in both categories
+    # The JS will handle displaying them in both categories if selected.
+
+    if request.method == 'POST':
+        user_id = request.form.get('user_id', type=int)
+        issued_by_id = current_user.id
+        date_issued_str = request.form.get('date_issued')
+        reason = request.form.get('reason')
+        severity = request.form.get('severity', 'Minor')
+        notes = request.form.get('notes')
+
+        if not user_id or not date_issued_str or not reason:
+            flash('Missing required fields for warning.', 'danger')
+            return render_template('add_warning.html',
+                                   staff_users=all_staff_users,
+                                   boh_staff=boh_staff, # Pass back for re-render if error
+                                   foh_staff=foh_staff, # Pass back for re-render if error
+                                   today_date=datetime.utcnow().date(),
+                                   current_selection_type='all') # Keep previous selection
+
+        try:
+            date_issued = datetime.strptime(date_issued_str, '%Y-%m-%d').date()
+        except ValueError:
+            flash('Invalid date format for date issued.', 'danger')
+            return render_template('add_warning.html',
+                                   staff_users=all_staff_users,
+                                   boh_staff=boh_staff,
+                                   foh_staff=foh_staff,
+                                   today_date=datetime.utcnow().date(),
+                                   current_selection_type='all')
+
+        warned_user = User.query.get(user_id)
+        if not warned_user or warned_user.id == current_user.id:
+            flash('Invalid staff member selected.', 'danger')
+            return render_template('add_warning.html',
+                                   staff_users=all_staff_users,
+                                   boh_staff=boh_staff,
+                                   foh_staff=foh_staff,
+                                   today_date=datetime.utcnow().date(),
+                                   current_selection_type='all')
+        if not any(role.name in staff_roles_allowed_to_warn for role in warned_user.roles):
+            flash('Cannot issue warning to a non-staff role.', 'danger')
+            return render_template('add_warning.html',
+                                   staff_users=all_staff_users,
+                                   boh_staff=boh_staff,
+                                   foh_staff=foh_staff,
+                                   today_date=datetime.utcnow().date(),
+                                   current_selection_type='all')
+
+        new_warning = Warning(
+            user_id=user_id,
+            issued_by_id=issued_by_id,
+            date_issued=date_issued,
+            reason=reason,
+            severity=severity,
+            notes=notes,
+            status='Active'
+        )
+        db.session.add(new_warning)
+        db.session.commit()
+        log_activity(f"Issued a '{severity}' warning to {warned_user.full_name} for '{reason[:50]}...'.")
+        flash(f"Warning issued to {warned_user.full_name} successfully!", 'success')
+        return redirect(url_for('manage_warnings'))
+
+    return render_template('add_warning.html',
+                           staff_users=all_staff_users, # Still pass all_staff_users for general view
+                           boh_staff=boh_staff,
+                           foh_staff=foh_staff,
+                           today_date=datetime.utcnow().date(),
+                           current_selection_type='all')
+
+
+@app.route('/warnings')
+@login_required
+@role_required(['manager', 'general_manager', 'system_admin'])
+def manage_warnings():
+    all_warnings = Warning.query.order_by(Warning.date_issued.desc(), Warning.timestamp.desc()).all()
+
+    # Get a list of all staff (recipients) and managers (issuers/resolvers) for filters
+    staff_users = User.query.join(User.roles).filter(Role.name.in_(['bartender', 'waiter', 'skullers'])).order_by(User.full_name).all()
+    manager_users = User.query.join(User.roles).filter(Role.name.in_(['manager', 'general_manager', 'system_admin'])).order_by(User.full_name).all()
+
+    return render_template('manage_warnings.html',
+                           warnings=all_warnings,
+                           staff_users=staff_users,
+                           manager_users=manager_users)
+
+
+@app.route('/warnings/edit/<int:warning_id>', methods=['GET', 'POST'])
+@login_required
+@role_required(['manager', 'general_manager', 'system_admin'])
+def edit_warning(warning_id):
+    warning = Warning.query.get_or_404(warning_id)
+
+    staff_roles = ['bartender', 'waiter', 'skullers']
+    staff_users = User.query.join(User.roles).filter(
+        Role.name.in_(staff_roles),
+        User.is_suspended == False
+    ).order_by(User.full_name).all()
+
+    if request.method == 'POST':
+        # Updates
+        warning.user_id = request.form.get('user_id', type=int) # Allow changing recipient if mistake was made
+        warning.date_issued = datetime.strptime(request.form.get('date_issued'), '%Y-%m-%d').date()
+        warning.reason = request.form.get('reason')
+        warning.severity = request.form.get('severity')
+        warning.notes = request.form.get('notes')
+        
+        # Status change (if any)
+        new_status = request.form.get('status')
+        if new_status and new_status != warning.status:
+            warning.status = new_status
+            if new_status == 'Resolved':
+                warning.resolution_date = datetime.utcnow().date()
+                warning.resolved_by_id = current_user.id
+            else: # If status changes from Resolved to something else, clear resolution info
+                warning.resolution_date = None
+                warning.resolved_by_id = None
+
+        db.session.commit()
+        log_activity(f"Edited warning ID {warning_id} for {warning.user.full_name}.")
+        flash('Warning updated successfully!', 'success')
+        return redirect(url_for('manage_warnings'))
+
+    return render_template('edit_warning.html',
+                           warning=warning,
+                           staff_users=staff_users,
+                           today_date=datetime.utcnow().date())
+
+
+@app.route('/warnings/resolve/<int:warning_id>', methods=['POST'])
+@login_required
+@role_required(['manager', 'general_manager', 'system_admin'])
+def resolve_warning(warning_id):
+    warning = Warning.query.get_or_404(warning_id)
+
+    # Only allow the issuing manager, GM, or System Admin to resolve
+    if warning.issued_by_id != current_user.id and not current_user.has_role('general_manager') and not current_user.has_role('system_admin'):
+        flash('You are not authorized to resolve this warning.', 'danger')
+        return redirect(url_for('manage_warnings'))
+
+    warning.status = 'Resolved'
+    warning.resolution_date = datetime.utcnow().date()
+    warning.resolved_by_id = current_user.id
+    db.session.commit()
+    log_activity(f"Resolved warning ID {warning_id} for {warning.user.full_name}.")
+    flash(f"Warning for {warning.user.full_name} marked as resolved.", 'success')
+    return redirect(url_for('manage_warnings'))
+
+
+@app.route('/warnings/delete/<int:warning_id>', methods=['POST'])
+@login_required
+@role_required(['general_manager', 'system_admin','manager'])
+def delete_warning(warning_id):
+    warning = Warning.query.get_or_404(warning_id)
+    # MODIFIED: Access the user's full name *before* deleting the warning
+    warned_user_full_name = warning.user.full_name # This loads the 'user' relationship now
+
+    db.session.delete(warning)
+    db.session.commit()
+
+    # Now use the pre-loaded name in the log and flash message
+    log_activity(f"Deleted warning ID {warning_id} for {warned_user_full_name}.")
+    flash(f"Warning for {warned_user_full_name} has been deleted.", 'success')
+    return redirect(url_for('manage_warnings'))
+
+@app.route('/eod_report', methods=['GET', 'POST'])
+@login_required
+@role_required(['manager', 'general_manager', 'system_admin'])
+def eod_report():
+    today_date = datetime.utcnow().date()
+    print(f"DEBUG: Entering eod_report. Request method: {request.method}")
+
+    existing_report = EndOfDayReport.query.filter_by(report_date=today_date).first()
+    if existing_report:
+        flash(f'An End of Day Report for {today_date.strftime("%Y-%m-%d")} has already been submitted. You can view it from a reports page if implemented.', 'info')
+        return redirect(url_for('dashboard'))
+
+    eod_sheet_link = None
+    # Initialize drive_folder_link with a default hardcoded value as requested
+    # Make sure GOOGLE_DRIVE_EOD_IMAGES_FOLDER_ID is correctly set in your config.py
+    drive_folder_link = f"https://drive.google.com/drive/folders/{app.config['GOOGLE_DRIVE_EOD_IMAGES_FOLDER_ID']}"
+    
+    uploaded_image_links = []
+
+
+    if request.method == 'POST':
+        print("DEBUG: Inside POST block.")
+        # --- NEW DEBUG ---
+        print(f"DEBUG: Full request.files object: {request.files}")
+        # --- END NEW DEBUG ---
+
+        form_data = {}
+        try:
+            form_data = {
+                'manager_id': current_user.id,
+                'report_date': today_date,
+                'gas_ordered': request.form.get('gas_ordered') == 'True',
+                'garnish_ordered': request.form.get('garnish_ordered') == 'True',
+                'maintenance_issues': request.form.get('maintenance_issues'),
+                'staff_pitched_absences': request.form.get('staff_pitched_absences'),
+                'staff_deductions': request.form.get('staff_deductions'),
+                'stock_borrowed_lent': request.form.get('stock_borrowed_lent'),
+                'customer_complaints': request.form.get('customer_complaints'),
+                'customer_complaint_contact_no': request.form.get('customer_complaint_contact_no'),
+                'shop_phone_on_charge': request.form.get('shop_phone_on_charge') == 'True',
+                'tv_boxes_locked': request.form.get('tv_boxes_locked') == 'True',
+                'all_equipment_switched_off': request.form.get('all_equipment_switched_off') == 'True',
+                'credit_card_machines_banked': request.form.get('credit_card_machines_banked') == 'True',
+                'card_machines_on_charge': request.form.get('card_machines_on_charge') == 'True',
+                'declare_card_sales_pos360': request.form.get('declare_card_sales_pos360'),
+                'actual_card_figure_banked': request.form.get('actual_card_figure_banked'),
+                'declare_cash_sales_pos360': request.form.get('declare_cash_sales_pos360'),
+                'actual_cash_on_hand': request.form.get('actual_cash_on_hand'),
+                'accounts_amount': request.form.get('accounts_amount'),
+                'stock_wastage_value': request.form.get('stock_wastage_value'),
+                'pos360_day_end_complete': request.form.get('pos360_day_end_complete') == 'True',
+                'todays_target': request.form.get('todays_target'),
+                'turnover_ex_tips': request.form.get('turnover_ex_tips'),
+                'security_walk_through_clean_shop': request.form.get('security_walk_through_clean_shop') == 'True',
+                'other_issues_experienced': request.form.get('other_issues_experienced'),
+                'email_copy_address': request.form.get('email_copy_address') if request.form.get('email_copy_checkbox') else None
+            }
+            print("DEBUG: form_data dictionary successfully created.")
+        except Exception as e:
+            print(f"DEBUG ERROR: Failed to create form_data dictionary: {e}")
+            flash(f"Error processing form data: {e}", 'danger')
+            return redirect(url_for('eod_report'))
+
+        try:
+            new_eod_report = EndOfDayReport(**form_data)
+            db.session.add(new_eod_report)
+            db.session.flush() # Flush to get new_eod_report.id for image filenames
+            print(f"DEBUG: new_eod_report created and flushed. ID: {new_eod_report.id}")
+        except Exception as e:
+            db.session.rollback()
+            print(f"DEBUG ERROR: Failed to create or flush new_eod_report: {e}")
+            flash(f"Error saving initial report details: {e}", 'danger')
+            return redirect(url_for('eod_report'))
+
+        # ====================================================================
+        # REVISED IMAGE UPLOAD SECTION
+        # ====================================================================
+        print("DEBUG: Starting image upload process...")
+        eod_files = request.files.getlist('eod_images')
+        print(f"DEBUG: Found {len(eod_files)} files to potentially upload for 'eod_images'.")
+
+        for i, file in enumerate(eod_files):
+            if file and file.filename != '':
+                print(f"DEBUG: Processing file {i+1} named: '{file.filename}' (MimeType: {file.mimetype}).")
+                filename = secure_filename(f"eod_image_{today_date.isoformat()}_{new_eod_report.id}_{i}_{file.filename}")
+                
+                # Rewind file stream to the beginning before reading, just in case.
+                file.seek(0)
+                file_stream = io.BytesIO(file.read())
+                
+                # Use file.mimetype directly if available, fallback to mimetypes.guess_type
+                mimetype = file.mimetype or 'application/octet-stream' 
+
+                print(f"DEBUG: Calling upload_file_to_drive for '{filename}' to folder ID: '{app.config['GOOGLE_DRIVE_EOD_IMAGES_FOLDER_ID']}'.")
+                
+                drive_link = upload_file_to_drive(file_stream, filename, mimetype, parent_folder_id=app.config['GOOGLE_DRIVE_EOD_IMAGES_FOLDER_ID'])
+
+                if drive_link:
+                    print(f"DEBUG: Successfully uploaded '{filename}'. Google Drive Link: {drive_link}")
+                    uploaded_image_links.append(EndOfDayReportImage(eod_report_id=new_eod_report.id, image_url=drive_link, filename=file.filename))
+                else:
+                    print(f"DEBUG ERROR: Failed to upload '{file.filename}'. 'upload_file_to_drive' returned None. Check error messages from 'upload_file_to_drive' in logs.")
+                    flash(f"Failed to upload image '{file.filename}' to Google Drive. Please check server logs for specific Google Drive API errors.", 'danger')
+            else:
+                print(f"DEBUG: Skipping empty or invalid file at index {i}.")
+
+        if uploaded_image_links:
+            db.session.add_all(uploaded_image_links)
+            print(f"DEBUG: {len(uploaded_image_links)} image links prepared for database commit.")
+        else:
+            print("DEBUG: No images were successfully uploaded for this report (uploaded_image_links is empty).")
+        # ====================================================================
+        # END REVISED IMAGE UPLOAD SECTION
+        # ====================================================================
+
+        try:
+            db.session.commit()
+            print("DEBUG: Database session committed (report and images).")
+        except Exception as e:
+            db.session.rollback()
+            print(f"DEBUG ERROR: Failed to commit new_eod_report and images: {e}")
+            flash(f"Error saving report data and images to database: {e}", 'danger')
+            return redirect(url_for('eod_report'))
+
+        # NEW LOGIC: Save email to user's profile if provided and not existing
+        submitted_email_for_copy = form_data.get('email_copy_address')
+        if submitted_email_for_copy and (not current_user.email or current_user.email != submitted_email_for_copy):
+            # Basic validation for email format (client-side handles better, but good server-side too)
+            if "@" in submitted_email_for_copy and "." in submitted_email_for_copy:
+                current_user.email = submitted_email_for_copy
+                try:
+                    db.session.commit() # Commit update to user's email
+                    flash(f"Your email address '{submitted_email_for_copy}' has been saved to your profile.", 'info')
+                    log_activity(f"Manager email updated to '{submitted_email_for_copy}' via EOD report.")
+                except Exception as e:
+                    db.session.rollback()
+                    app.logger.error(f"Failed to save manager email to profile: {e}", exc_info=True)
+                    flash("Failed to save your email to your profile.", 'warning')
+            else:
+                flash("The provided email address is not valid and could not be saved to your profile.", 'warning')
+
+
+        print(f"DEBUG: Before sheet_row_data assignment. uploaded_image_links count: {len(uploaded_image_links)}")
+        sheet_row_data = {}
+        try:
+            # Use the hardcoded drive_folder_link here
+            image_link_for_sheet = f'=HYPERLINK("{drive_folder_link}", "View Folder")'
+
+            sheet_row_data = {
+                'Report Date': today_date.isoformat(),
+                'Manager Name': current_user.full_name,
+                'Gas Ordered': 'Yes' if form_data['gas_ordered'] else 'No',
+                'Garnish Ordered': 'Yes' if form_data['garnish_ordered'] else 'No',
+                'Maintenance Issues': form_data['maintenance_issues'],
+                'Staff Pitched / Absences': form_data['staff_pitched_absences'],
+                'Staff Deductions': form_data['staff_deductions'],
+                'Stock Borrowed/Lent': form_data['stock_borrowed_lent'],
+                'Customer Complaints': form_data['customer_complaints'],
+                'Customer Complaint Contact': form_data['customer_complaint_contact_no'],
+                'Shop Phone On Charge': 'Yes' if form_data['shop_phone_on_charge'] else 'No',
+                'TV Boxes Locked': 'Yes' if form_data['tv_boxes_locked'] == 'True' else 'No',
+                'All Equipment Switched Off': 'Yes' if form_data['all_equipment_switched_off'] == 'True' else 'No',
+                'Credit Card Machines Banked': 'Yes' if form_data['credit_card_machines_banked'] == 'True' else 'No',
+                'Card Machines On Charge': 'Yes' if form_data['card_machines_on_charge'] == 'True' else 'No',
+                'Declared Card Sales (POS360)': form_data['declare_card_sales_pos360'],
+                'Actual Card Figure Banked': form_data['actual_card_figure_banked'],
+                'Image Links': image_link_for_sheet,
+                'Declared Cash Sales (POS360)': form_data['declare_cash_sales_pos360'],
+                'Actual Cash On Hand': form_data['actual_cash_on_hand'],
+                'Accounts Amount': form_data['accounts_amount'],
+                'Stock Wastage Value': form_data['stock_wastage_value'],
+                'POS360 Day End Complete': 'Yes' if form_data['pos360_day_end_complete'] == 'True' else 'No',
+                'Today\'s Target': form_data['todays_target'],
+                'Turnover (ex TIPS)': form_data['turnover_ex_tips'],
+                'Security Walk Through': 'Yes' if form_data['security_walk_through_clean_shop'] == 'True' else 'No',
+                'Other Issues Experienced': form_data['other_issues_experienced'],
+            }
+            print("DEBUG: sheet_row_data dictionary successfully created.")
+        except Exception as e:
+            print(f"DEBUG ERROR: Failed to create sheet_row_data: {e}")
+            flash(f"Error preparing report data for Google Sheet: {e}", 'danger')
+            return redirect(url_for('eod_report'))
+
+        eod_sheet_link = _append_eod_data_to_google_sheet(
+            app.config['EOD_REPORT_SHEET_ID'],
+            sheet_row_data
+        )
+        
+        flash(f"Report data appended to Google Sheet. <a href='https://docs.google.com/spreadsheets/d/1KRlXPOVpad_gRpUcc3KIc-2-Kv14OSEyBS-OSNKsdZ4' target='_blank'>View Sheet</a>", 'info')
+        
+        if new_eod_report.email_copy_address:
+            send_eod_report_email(
+                new_eod_report,
+                current_user.full_name,
+                uploaded_image_links,
+                app.config['EOD_REPORT_RECIPIENTS'],
+                eod_sheet_link=eod_sheet_link,
+                drive_folder_link=drive_folder_link,
+                personal_email_copy=new_eod_report.email_copy_address
+            )
+            print(f"DEBUG: Email copy requested for {new_eod_report.email_copy_address}.")
+        else:
+             send_eod_report_email(
+                new_eod_report,
+                current_user.full_name,
+                uploaded_image_links,
+                app.config['EOD_REPORT_RECIPIENTS'],
+                eod_sheet_link=eod_sheet_link,
+                drive_folder_link=drive_folder_link
+            )
+             print("DEBUG: Sending email to default recipients.")
+
+        log_activity(f"Submitted End of Day Report for {today_date}.")
+        flash('End of Day Report submitted successfully!', 'success')
+        return redirect(url_for('dashboard'))
+
+    return render_template('eod_report.html', today_date=today_date)
 
 # ==============================================================================
 # Auth Routes
@@ -1587,7 +2302,7 @@ def change_password():
         if not bcrypt.check_password_hash(current_user.password, current_password):
             flash('Your current password is incorrect. Please try again.', 'danger')
             return redirect(url_for('change_password'))
-        
+
         if new_password != confirm_password:
             flash('The new passwords do not match.', 'danger')
             return redirect(url_for('change_password'))
@@ -1625,7 +2340,7 @@ def reset_request():
 def request_recount():
     product_id = request.form.get('product_id', type=int)
     location_id = request.form.get('location_id', type=int)
-    
+
     if not product_id and not location_id:
         flash('Must specify a product or a location for a recount.', 'danger')
         return redirect(request.referrer or url_for('variance'))
@@ -1633,7 +2348,7 @@ def request_recount():
     if product_id and location_id:
         flash('Please request a recount for either a product OR a location, not both at once.', 'danger')
         return redirect(request.referrer or url_for('variance'))
-    
+
     target_obj_name = ""
     target_type = ""
     if product_id:
@@ -1684,7 +2399,7 @@ def request_recount():
     )
     # Target roles who are typically responsible for counts
     target_roles_for_recount = Role.query.filter(Role.name.in_(['bartender', 'skullers'])).all()
-    
+
     new_announcement = Announcement(
         user_id=current_user.id,
         title=notification_title,
@@ -1720,7 +2435,7 @@ def deliveries():
         except ValueError:
             flash('Invalid date format for delivery date.', 'danger')
             return redirect(url_for('deliveries'))
-        
+
         if quantity <= 0:
             flash('Delivery quantity must be positive.', 'danger')
             return redirect(url_for('deliveries'))
@@ -1740,7 +2455,7 @@ def deliveries():
 
     # GET request: Display existing deliveries
     recent_deliveries = Delivery.query.order_by(Delivery.delivery_date.desc(), Delivery.timestamp.desc()).limit(20).all()
-    
+
     # --- NEW: Pass current_date to the template ---
     current_date = datetime.utcnow().date()
 
@@ -1754,13 +2469,13 @@ def deliveries():
 def beginning_of_day():
     today_date = datetime.utcnow().date()
     yesterday = today_date - timedelta(days=1)
-    
+
     products = Product.query.order_by(Product.type, Product.name).all()
-    
+
     # --- MODIFIED: Move these definitions to the top level of the function ---
     # Pre-populate sales data from DB for yesterday's sales (manual products)
     existing_manual_sales_for_yesterday_db = {
-        s.product_id: s.quantity_sold 
+        s.product_id: s.quantity_sold
         for s in Sale.query.filter_by(date=yesterday).all()
     }
     # Pre-populate cocktails sold data from DB for yesterday's cocktail sales
@@ -1778,7 +2493,7 @@ def beginning_of_day():
 
     # bod_for_today_already_calculated_and_saved_to_db: checks if BOD for TODAY exists in the table.
     bod_for_today_already_calculated_and_saved_to_db = BeginningOfDay.query.filter_by(date=today_date).first() is not None
-    
+
     # User can submit yesterday's sales IF yesterday's BOD exists AND today's BOD hasn't been saved yet.
     can_submit_yesterdays_sales = yesterdays_bod_exists and not bod_for_today_already_calculated_and_saved_to_db
 
@@ -1794,7 +2509,7 @@ def beginning_of_day():
             y_bod = yesterdays_bod_counts.get(product.id, 0.0)
             y_manual_sold = yesterdays_manual_sales_preview.get(product.id, 0.0)
             y_cocktail_usage = yesterdays_cocktail_usage_preview.get(product.id, 0.0)
-            
+
             todays_calculated_bod = y_bod - y_manual_sold - y_cocktail_usage
             calculated_bod_for_today_preview[product.id] = max(0.0, todays_calculated_bod)
     else:
@@ -1822,17 +2537,18 @@ def beginning_of_day():
             if 'sales_csv_file' not in request.files:
                 flash('No file selected for upload.', 'warning')
                 # Return current context
-                return render_template('beginning_of_day.html', 
-                               products=products, 
-                               all_recipes=all_recipes_objects, 
+                return render_template('beginning_of_day.html',
+                               products=products,
+                               all_recipes=all_recipes_objects,
                                all_recipes_json=json.dumps(all_recipes_json_serializable),
-                               sales_from_csv=sales_from_csv, 
-                               existing_sales_for_yesterday=existing_manual_sales_for_yesterday_db, 
+                               sales_from_csv=sales_from_csv,
+                               existing_sales_for_yesterday=existing_manual_sales_for_yesterday_db,
                                existing_cocktails_sold_for_yesterday=existing_cocktails_sold_for_yesterday_db,
                                bod_values_to_display=bod_values_to_display,
                                can_submit_yesterdays_sales=can_submit_yesterdays_sales,
-                               bod_for_today_already_calculated_and_saved_to_db=bod_for_today_already_calculated_and_saved_to_db)
-            
+                               bod_for_today_already_calculated_and_saved_to_db=bod_for_today_already_calculated_and_saved_to_db,
+                               yesterday=yesterday)
+
             file = request.files['sales_csv_file']
             if file and file.filename != '':
                 try:
@@ -1848,24 +2564,25 @@ def beginning_of_day():
                             if product_name in product_map:
                                 product_id = product_map[product_name].id
                                 sales_from_csv[product_id] = quantity_sold
-                    
+
                     flash('Sales data imported from CSV. Please review the values below, complete the starting counts, and then submit.', 'success')
                 except Exception as e:
                     flash(f'Error processing CSV file: {e}', 'danger')
             else:
                 flash('No file selected for upload.', 'warning')
-            
+
             # When uploading CSV, also pass all other relevant context
-            return render_template('beginning_of_day.html', 
-                                   products=products, 
-                                   all_recipes=all_recipes_objects, 
+            return render_template('beginning_of_day.html',
+                                   products=products,
+                                   all_recipes=all_recipes_objects,
                                    all_recipes_json=json.dumps(all_recipes_json_serializable),
                                    sales_from_csv=sales_from_csv,
                                    existing_sales_for_yesterday=existing_manual_sales_for_yesterday_db,
                                    existing_cocktails_sold_for_yesterday=existing_cocktails_sold_for_yesterday_db,
                                    bod_values_to_display=bod_values_to_display,
                                    can_submit_yesterdays_sales=can_submit_yesterdays_sales,
-                                   bod_for_today_already_calculated_and_saved_to_db=bod_for_today_already_calculated_and_saved_to_db)
+                                   bod_for_today_already_calculated_and_saved_to_db=bod_for_today_already_calculated_and_saved_to_db,
+                                   yesterday=yesterday)
 
 
         elif action == 'submit_bod':
@@ -1884,7 +2601,7 @@ def beginning_of_day():
                         db.session.add(Sale(product_id=product.id, quantity_sold=float(sales_count), date=yesterday))
                 elif existing_qty_db:
                     existing_qty_db.quantity_sold = 0.0
-            
+
             # 2. Save yesterday's cocktail sales
             recipe_ids = request.form.getlist('cocktail_recipe_id[]')
             quantities_sold = request.form.getlist('cocktail_quantity_sold[]')
@@ -1919,7 +2636,7 @@ def beginning_of_day():
                 y_manual_sold = Sale.query.filter_by(product_id=product.id, date=yesterday).first()
                 y_manual_sold_qty = y_manual_sold.quantity_sold if y_manual_sold else 0.0
                 y_cocktail_usage = total_ingredient_usage_yesterday_recalculated.get(product.id, 0.0)
-                
+
                 todays_final_bod = y_bod - y_manual_sold_qty - y_cocktail_usage
                 todays_final_bod = max(0.0, todays_final_bod) # Ensure non-negative stock
 
@@ -1929,74 +2646,63 @@ def beginning_of_day():
                     bod_entry_for_today.amount = todays_final_bod
                 else:
                     db.session.add(BeginningOfDay(product_id=product.id, amount=todays_final_bod, date=today_date))
-            
+
             db.session.commit() # Commit today's BOD calculations
 
             flash("Yesterday's sales recorded, and today's Beginning of Day inventory has been automatically calculated.", 'success')
             return redirect(url_for('dashboard'))
 
     # --- GET Request Context for rendering the template ---
-    return render_template('beginning_of_day.html', 
-                           products=products, 
-                           all_recipes=all_recipes_objects, 
-                           all_recipes_json=json.dumps(all_recipes_json_serializable), 
-                           sales_from_csv=sales_from_csv, 
-                           existing_sales_for_yesterday=existing_manual_sales_for_yesterday_db, 
+    return render_template('beginning_of_day.html',
+                           products=products,
+                           all_recipes=all_recipes_objects,
+                           all_recipes_json=json.dumps(all_recipes_json_serializable),
+                           sales_from_csv=sales_from_csv,
+                           existing_sales_for_yesterday=existing_manual_sales_for_yesterday_db,
                            existing_cocktails_sold_for_yesterday=existing_cocktails_sold_for_yesterday_db,
                            bod_values_to_display=bod_values_to_display, # Pass calculated/existing BOD for display
                            can_submit_yesterdays_sales=can_submit_yesterdays_sales, # Control submit button/inputs
-                           bod_for_today_already_calculated_and_saved_to_db=bod_for_today_already_calculated_and_saved_to_db # Indicate if BOD is already present for today
-                           )
+                           bod_for_today_already_calculated_and_saved_to_db=bod_for_today_already_calculated_and_saved_to_db, # Indicate if BOD is already present for today
+                           yesterday=yesterday)
 
 @app.route('/count/<string:location_slug>', methods=['GET', 'POST'])
 @login_required
 def submit_count(location_slug):
-    # --- MODIFIED: Define today here ---
     today_date = datetime.utcnow().date()
-    yesterday = today_date - timedelta(days=1) # Use today_date here
-    # --- END MODIFIED ---
+    yesterday = today_date - timedelta(days=1)
 
     location_name = location_slug.replace('_', ' ').title()
     location = Location.query.filter_by(name=location_name).first_or_404()
-    products_in_location = location.products.order_by(Product.type, Product.name).all() # Renamed for clarity
+    products_in_location = location.products.order_by(Product.type, Product.name).all()
     if not products_in_location:
         flash(f'No products assigned to "{location.name}". Please contact an admin.', 'warning')
         return redirect(url_for('dashboard'))
-    
-    # --- Pre-calculate yesterday's EOD (which is today's BOD) for all products ---
-    expected_bod_for_today_all_products = {} # {product_id: amount}
-    
-    # 1. Get yesterday's BOD
+
+    expected_bod_for_today_all_products = {}
+
     yesterdays_bod_counts = {
         b.product_id: b.amount
         for b in BeginningOfDay.query.filter_by(date=yesterday).all()
     }
-    
-    # 2. Get yesterday's manual sales
     yesterdays_manual_sales = {
         s.product_id: s.quantity_sold
         for s in Sale.query.filter_by(date=yesterday).all()
     }
-    
-    # 3. Get yesterday's cocktail ingredient usage
     yesterdays_cocktail_usage = _calculate_ingredient_usage_from_cocktails_sold(yesterday)
 
-    # Calculate today's BOD (which is yesterday's EOD) based on yesterday's data
-    for product in Product.query.all(): # Loop through ALL products to get their BOD
+    for product in Product.query.all():
         y_bod = yesterdays_bod_counts.get(product.id, 0.0)
         y_manual_sold = yesterdays_manual_sales.get(product.id, 0.0)
         y_cocktail_usage = yesterdays_cocktail_usage.get(product.id, 0.0)
-        
+
         calculated_eod_yesterday = y_bod - y_manual_sold - y_cocktail_usage
         expected_bod_for_today_all_products[product.id] = max(0.0, calculated_eod_yesterday)
 
-    # --- Pre-calculate today's deliveries ---
     todays_deliveries = {
         d.product_id: d.quantity
-        for d in Delivery.query.filter_by(delivery_date=today_date).all() # Use today_date here
+        for d in Delivery.query.filter_by(delivery_date=today_date).all()
     }
 
-    # --- Fetch current counts for display (unchanged) ---
     current_counts = {}
     all_counts_today = Count.query.filter(
         Count.location == location.name,
@@ -2013,20 +2719,17 @@ def submit_count(location_slug):
         submit_type = request.form.get('submit_type')
         count_data = []
         count_type_str = 'First Count' if submit_type == 'first_count' else 'Corrections Count'
-        
+
         for product in products_in_location:
             count_value = request.form.get(f'product_{product.id}')
             if count_value:
                 actual_amount = float(count_value)
                 comment = request.form.get(f'comment_{product.id}')
 
-                # --- NEW VARIANCE CALCULATION LOGIC ---
                 expected_amount_at_count = expected_bod_for_today_all_products.get(product.id, 0.0)
-                # Add deliveries for this product for today to the expected amount
                 expected_amount_at_count += todays_deliveries.get(product.id, 0.0)
-                
+
                 variance = actual_amount - expected_amount_at_count
-                # --- END NEW VARIANCE CALCULATION LOGIC ---
 
                 new_count_entry = Count(
                     product_id=product.id,
@@ -2035,24 +2738,23 @@ def submit_count(location_slug):
                     count_type=count_type_str,
                     amount=actual_amount,
                     comment=comment,
-                    expected_amount=expected_amount_at_count, # Save expected
-                    variance_amount=variance # Save variance
+                    expected_amount=expected_amount_at_count,
+                    variance_amount=variance
                 )
 
                 if submit_type == 'first_count':
                     count_data.append(new_count_entry)
-                
+
                 elif submit_type == 'corrections_count' and request.form.get(f'correct_{product.id}'):
                     first_count_submitter = first_counts.get(product.id)
-                    
-                    is_self_correcting = (first_count_submitter and 
+
+                    is_self_correcting = (first_count_submitter and
                                           first_count_submitter.user_id == current_user.id)
-                    
+
                     if not is_self_correcting:
                         count_data.append(new_count_entry)
                     else:
                         log_activity(f"Skipped self-correction attempt by {current_user.username} for product {product.name}.")
-            # else: count_value was empty, skip it
 
         if count_data:
             db.session.add_all(count_data)
@@ -2068,12 +2770,11 @@ def submit_count(location_slug):
                 user_id=current_user.id,
                 title=general_count_notification_title,
                 message=general_count_notification_message,
-                category='Urgent', # Set as Urgent for managers to review
+                category='Urgent',
                 target_roles=Role.query.filter(Role.name.in_(['manager', 'general_manager', 'system_admin'])).all()
             )
             db.session.add(general_count_announcement)
 
-            # Trigger Manager Notification for Variance (existing logic, modified slightly)
             for entry in count_data:
                 if entry.variance_amount is not None and entry.variance_amount != 0:
                     variance_notification_title = "Significant Inventory Variance Detected"
@@ -2084,26 +2785,30 @@ def submit_count(location_slug):
                         f"Action required."
                     )
                     variance_announcement = Announcement(
-                        user_id=current_user.id, # User who submitted count
+                        user_id=current_user.id,
                         title=variance_notification_title,
                         message=variance_notification_message,
-                        category='Urgent', # Still Urgent for specific variances
+                        category='Urgent',
                         target_roles=Role.query.filter(Role.name.in_(['manager', 'general_manager', 'system_admin'])).all()
                     )
                     db.session.add(variance_announcement)
-            db.session.commit() # Commit all announcements
-            # --- END MODIFIED ---
+            db.session.commit()
 
         else:
             flash('No new count data was submitted.', 'info')
-            
+
         return redirect(url_for('dashboard'))
 
-    return render_template('count.html', 
-                           products=products_in_location, 
-                           location=location, 
-                           current_counts=current_counts, 
-                           first_counts=first_counts)
+    # NEW: Fetch all distinct product types for the filter dropdown
+    all_product_types = db.session.query(distinct(Product.type)).order_by(Product.type).all()
+    all_product_types = [t[0] for t in all_product_types]
+
+    return render_template('count.html',
+                           products=products_in_location,
+                           location=location,
+                           current_counts=current_counts,
+                           first_counts=first_counts,
+                           all_product_types=all_product_types)
 
 # ==============================================================================
 # Reporting Routes
@@ -2123,9 +2828,9 @@ def daily_summary():
         report_date_str = report_date.isoformat()
 
     day_before_report_date = report_date - timedelta(days=1) # This is 'yesterday' for BOD source
-    
+
     products = Product.query.order_by(Product.type, Product.name).all()
-    
+
     # --- Data Collection for the Report Date ---
     # 1. Beginning of Day (BOD) for the report_date
     #    This should be the autonomously calculated BOD for `report_date`
@@ -2152,9 +2857,9 @@ def daily_summary():
     # 5. End of Day (EOD) Actual from latest counts for the report_date
     eod_actual_counts = {} # {product_id: latest_count_amount}
     eod_latest_count_objects = {} # {product_id: Count_object} for accessing stored variance_amount
-    
+
     all_counts_on_report_date = Count.query.filter(func.date(Count.timestamp) == report_date).all()
-    
+
     for count in all_counts_on_report_date:
         product_id = count.product_id
         # Take the latest count for a given product on that day as the EOD actual
@@ -2162,14 +2867,14 @@ def daily_summary():
             eod_actual_counts[product_id] = count.amount
             eod_latest_count_objects[product_id] = count
 
-    
+
     summary_data = []
     for product in products:
         bod = bod_counts.get(product.id, 0.0)
         deliveries = deliveries_for_day.get(product.id, 0.0)
         manual_sales = manual_sales_for_day.get(product.id, 0.0)
         cocktail_usage = cocktail_usage_for_day.get(product.id, 0.0)
-        
+
         # Expected stock available during the day (before sales, after BOD+Deliveries)
         expected_stock_available = bod + deliveries
 
@@ -2178,40 +2883,40 @@ def daily_summary():
 
         # Expected EOD = BOD + Deliveries - Total Usage
         expected_eod = expected_stock_available - total_usage_for_day
-        
+
         actual_eod = eod_actual_counts.get(product.id, None) # Can be None if no count was done
-        
+
         variance_val = None
         loss_value = None
 
         latest_count_obj = eod_latest_count_objects.get(product.id)
         if latest_count_obj and latest_count_obj.variance_amount is not None:
             # Use the pre-calculated variance from the latest Count object for that day
-            variance_val = latest_count_obj.variance_amount 
+            variance_val = latest_count_obj.variance_amount
         elif actual_eod is not None:
             # If actual_eod exists but no variance_amount was stored with it, calculate it
-            variance_val = actual_eod - expected_eod 
+            variance_val = actual_eod - expected_eod
 
         if variance_val is not None and product.unit_price is not None:
             loss_value = variance_val * product.unit_price
 
 
         summary_data.append({
-            'name': product.name, 
-            'unit': product.unit_of_measure, 
-            'bod': bod, 
+            'name': product.name,
+            'unit': product.unit_of_measure,
+            'bod': bod,
             'deliveries': deliveries,
             'manual_sales': manual_sales,
             'cocktail_usage': cocktail_usage,
             'total_usage_for_day': total_usage_for_day,
             'expected_eod': max(0.0, expected_eod), # Ensure non-negative display
-            'actual_eod': actual_eod, 
+            'actual_eod': actual_eod,
             'variance': variance_val,
             'loss_value': loss_value
         })
-        
-    return render_template('daily_summary.html', 
-                           summary_data=summary_data, 
+
+    return render_template('daily_summary.html',
+                           summary_data=summary_data,
                            report_date_str=report_date_str,
                            report_date=report_date)
 
@@ -2220,7 +2925,7 @@ def daily_summary():
 @role_required(['manager', 'general_manager', 'system_admin', 'owners'])
 def variance():
     today = datetime.utcnow().date() # Report date defaults to today
-    
+
     # Allow selection of report date, default to today
     report_date_str = request.args.get('date', datetime.utcnow().date().isoformat())
     try:
@@ -2232,7 +2937,7 @@ def variance():
 
     # Fetch all counts for the report_date that have a non-zero variance_amount
     # OR where correction amount is different from first count amount (if applicable)
-    
+
     # We need all counts to correctly determine first vs correction, and to get the latest.
     all_counts_on_report_date = Count.query.filter(
         func.date(Count.timestamp) == report_date
@@ -2263,22 +2968,22 @@ def variance():
 
         # The 'final' count for display and explanation is the correction if it exists, otherwise the first.
         final_count_entry = correction_count_entry if correction_count_entry else first_count_entry
-        
+
         # Only proceed if there's an actual count and it has a variance or difference
         if not final_count_entry:
             continue
 
         # Check for conditions to include in the report
         has_significant_variance = (
-            final_count_entry.variance_amount is not None and 
+            final_count_entry.variance_amount is not None and
             final_count_entry.variance_amount != 0
         )
         has_correction_difference = ( # Still include if correction changed from first, even if variance is zero
-            correction_count_entry is not None and 
+            correction_count_entry is not None and
             first_count_entry is not None and
             correction_count_entry.amount != first_count_entry.amount
         )
-        
+
         if has_significant_variance or has_correction_difference:
             variance_report_data[(product_id, location_name)] = {
                 'location': location_name,
@@ -2296,9 +3001,9 @@ def variance():
             }
 
     sorted_variance_list = sorted(list(variance_report_data.values()), key=lambda x: (x['location'], x['product_name']))
-    
-    return render_template('variance.html', 
-                           variance_data=sorted_variance_list, 
+
+    return render_template('variance.html',
+                           variance_data=sorted_variance_list,
                            report_date_str=report_date_str,
                            report_date=report_date)
 
@@ -2308,7 +3013,7 @@ def variance():
 def reports():
     start_date_str = request.args.get('start_date', (datetime.utcnow().date() - timedelta(days=7)).isoformat())
     end_date_str = request.args.get('end_date', datetime.utcnow().date().isoformat())
-    
+
     try:
         start_date = datetime.strptime(start_date_str, '%Y-%m-%d').date()
         end_date = datetime.strptime(end_date_str, '%Y-%m-%d').date()
@@ -2413,9 +3118,9 @@ def reports():
 
     all_activities.sort(key=lambda x: x['timestamp'])
 
-    return render_template('reports.html', 
-                           report_data=all_activities, 
-                           start_date=start_date_str, 
+    return render_template('reports.html',
+                           report_data=all_activities,
+                           start_date=start_date_str,
                            end_date=end_date_str)
 
 @app.route('/historical_report', methods=['GET'])
@@ -2439,13 +3144,13 @@ def variance_explanations():
         .join(User, VarianceExplanation.user_id == User.id) \
         .order_by(VarianceExplanation.timestamp.desc()) \
         .all()
-    
+
     # We will need to calculate the actual variance here to display it
     # Variance = Count.amount - (Calculated_Expected_Stock_at_time_of_count)
     # For now, let's just show the count.amount and product info,
     # The full Expected Stock calculation will come in Phase 2.
     # For this report, we'll aim to show: Date, Location, Product, Recorded Count, Reason, Explained By.
-     
+
 
     return render_template('variance_explanations.html', explanations=explanations)
 
@@ -2466,7 +3171,7 @@ def explain_variance(count_id):
             # If coming from a modal, may need to handle this differently, or re-render a small form.
             # For simplicity, redirect back to variance report.
             return redirect(url_for('variance'))
-        
+
         if existing_explanation:
             existing_explanation.reason = reason
             existing_explanation.timestamp = datetime.utcnow()
@@ -2482,7 +3187,7 @@ def explain_variance(count_id):
             db.session.add(new_explanation)
             flash('Variance explanation recorded successfully!', 'success')
             log_activity(f"Recorded variance explanation for Count ID {count_id} (Product: {count_entry.product.name}).")
-        
+
         db.session.commit()
         return redirect(url_for('variance'))
 
@@ -2514,7 +3219,7 @@ def add_recipe():
     if request.method == 'POST':
         name = request.form.get('name')
         instructions = request.form.get('instructions')
-        
+
         # Check if a recipe with this name already exists
         if Recipe.query.filter_by(name=name).first():
             flash(f'A recipe named "{name}" already exists. Please choose a different name.', 'danger')
@@ -2543,7 +3248,7 @@ def add_recipe():
         log_activity(f"Created new recipe: '{name}'.")
         flash('Recipe added successfully!', 'success')
         return redirect(url_for('recipes'))
-    
+
     return render_template('add_recipe.html', products=products)
 
 @app.route('/recipes/edit/<int:recipe_id>', methods=['GET', 'POST'])
@@ -2557,11 +3262,11 @@ def edit_recipe(recipe_id):
     if recipe.user_id != current_user.id and not current_user.has_role('system_admin') and not current_user.has_role('general_manager'):
         flash('You are not authorized to edit this recipe.', 'danger')
         return redirect(url_for('recipes'))
-        
+
     if request.method == 'POST':
         recipe.name = request.form.get('name')
         recipe.instructions = request.form.get('instructions')
-        
+
         # Check for duplicate name if changed (excluding itself)
         existing_recipe_with_name = Recipe.query.filter(Recipe.name == recipe.name, Recipe.id != recipe_id).first()
         if existing_recipe_with_name:
@@ -2592,13 +3297,13 @@ def edit_recipe(recipe_id):
         log_activity(f"Edited recipe: '{recipe.name}'.")
         flash('Recipe updated successfully!', 'success')
         return redirect(url_for('recipes'))
-    
+
     # For GET request, fetch existing ingredients for pre-population
     existing_ingredients = RecipeIngredient.query.filter_by(recipe_id=recipe.id).all()
 
-    return render_template('edit_recipe.html', 
-                           recipe=recipe, 
-                           products=products, 
+    return render_template('edit_recipe.html',
+                           recipe=recipe,
+                           products=products,
                            existing_ingredients=existing_ingredients)
 
 @app.route('/recipes/delete/<int:recipe_id>', methods=['POST'])
@@ -2609,7 +3314,7 @@ def delete_recipe(recipe_id):
     if recipe.user_id != current_user.id and not current_user.has_role('system_admin'):
         flash('You are not authorized to delete this recipe.', 'danger')
         return redirect(url_for('recipes'))
-        
+
     log_activity(f"Deleted recipe: '{recipe.name}'.")
     db.session.delete(recipe)
     db.session.commit()
@@ -2672,7 +3377,7 @@ def manage_required_staff(role_name):
         for day in week_dates:
             min_staff_key = f'min_staff_{day.isoformat()}'
             max_staff_key = f'max_staff_{day.isoformat()}'
-            
+
             min_staff_value = request.form.get(min_staff_key, type=int)
             max_staff_value = request.form.get(max_staff_key, type=int)
 
@@ -2688,14 +3393,14 @@ def manage_required_staff(role_name):
                                                      .filter(RequiredStaff.shift_date.in_(week_dates))
                                                      .all()
                     }
-                    return render_template('manage_required_staff.html', 
-                                           week_dates=week_dates, 
-                                           role_name=role_name, 
+                    return render_template('manage_required_staff.html',
+                                           week_dates=week_dates,
+                                           role_name=role_name,
                                            existing_minimums=existing_minimums,
                                            display_dates=[d for d in week_dates if d.weekday() != 0])
 
                 required_staff_entry = RequiredStaff.query.filter_by(
-                    role_name=role_name, 
+                    role_name=role_name,
                     shift_date=day
                 ).first()
 
@@ -2704,16 +3409,16 @@ def manage_required_staff(role_name):
                     required_staff_entry.max_staff = max_staff_value
                 else:
                     new_entry = RequiredStaff(
-                        role_name=role_name, 
-                        shift_date=day, 
+                        role_name=role_name,
+                        shift_date=day,
                         min_staff=min_staff_value if min_staff_value is not None else 0,
                         max_staff=max_staff_value
                     )
                     db.session.add(new_entry)
-        
+
         db.session.commit()
         flash(f'Staff requirements for {role_name.title()} updated successfully.', 'success')
-        
+
         # --- MODIFIED: Correct endpoint for all roles (now using suffix for plural) ---
         # Construct the endpoint name correctly (e.g., 'scheduler_bartenders', 'scheduler_managers')
         # All scheduler endpoints are plural
@@ -2729,9 +3434,9 @@ def manage_required_staff(role_name):
                                      .all()
     }
 
-    return render_template('manage_required_staff.html', 
-                           week_dates=week_dates, 
-                           role_name=role_name, 
+    return render_template('manage_required_staff.html',
+                           week_dates=week_dates,
+                           role_name=role_name,
                            existing_minimums=existing_minimums,
                            display_dates=[d for d in week_dates if d.weekday() != 0])
 
@@ -2741,46 +3446,32 @@ def manage_required_staff(role_name):
 def submit_shifts():
     current_today = datetime.utcnow().date()
 
-    # Calculate the Monday of the week for which shifts are being submitted.
-    # If current_today is Monday (weekday 0), then days_until_next_monday will be 0,
-    # so next_monday_date will be current_today.
-    # If current_today is, say, Wednesday (weekday 2), then days_until_next_monday will be 5,
-    # making next_monday_date the upcoming Monday.
     days_until_next_monday = (0 - current_today.weekday() + 7) % 7
     next_monday_date = current_today + timedelta(days=days_until_next_monday)
 
-    # next_week_dates will be the list of dates for the week starting on next_monday_date
-    # (e.g., if next_monday_date is Sep 1, then next_week_dates is Sep 1 to Sep 7)
     next_week_dates = [next_monday_date + timedelta(days=i) for i in range(7)]
 
-    # --- CORRECTED SUBMISSION WINDOW CALCULATION ---
-    # The submission window should start on the Tuesday of the week *preceding* next_monday_date.
-    # Example: If next_monday_date is Sep 1, 2025, then start date is Aug 26, 2025.
     submission_window_start_date = next_monday_date - timedelta(weeks=1) + timedelta(days=1)
-
-    # The submission window should end on the Monday *of* next_monday_date (the current target week).
-    # Example: If next_monday_date is Sep 1, 2025, then end date is Sep 1, 2025.
     submission_window_end_date = next_monday_date
 
-    submission_window_start = datetime.combine(submission_window_start_date, time(10, 0, 0))
-    submission_window_end = datetime.combine(submission_window_end_date, time(12, 0, 0))
-    # --- END OF CORRECTED CALCULATION ---
+    submission_window_start = datetime.combine(submission_window_start_date, time(10, 0, 0)) # Current Tuesday 10 AM UTC
+    submission_window_end = datetime.combine(submission_window_end_date, time(12, 0, 0)) # Next Monday 12 PM UTC (noon) UTC
 
     current_utc_time = datetime.utcnow()
     is_submission_window_open = (current_utc_time >= submission_window_start and
                                  current_utc_time <= submission_window_end)
 
-    time_until_window_opens = None
-    time_until_window_closes = None
-    if current_utc_time < submission_window_start:
-        time_until_window_opens = submission_window_start - current_utc_time
-    elif current_utc_time < submission_window_end:
-        time_until_window_closes = submission_window_end - current_utc_time
+    # These timedelta objects are no longer needed directly by the template for the timer.
+    # The template will use the ISO string formats of submission_window_start/end.
+    # time_until_window_opens = None
+    # time_until_window_closes = None
+    # if current_utc_time < submission_window_start:
+    #     time_until_window_opens = submission_window_start - current_utc_time
+    # elif current_utc_time < submission_window_end:
+    #     time_until_window_closes = submission_window_end - current_utc_time
 
     staff_submission_shift_types = ['Day', 'Night']
 
-    # --- START OF FIX: Define these variables at the top-level of the function ---
-    # This ensures they are always initialized before any render_template call.
     existing_submissions = ShiftSubmission.query.filter(
         ShiftSubmission.user_id == current_user.id,
         ShiftSubmission.shift_date.in_(next_week_dates)
@@ -2793,24 +3484,19 @@ def submit_shifts():
             existing_set_for_display.add(f"{s.shift_date.isoformat()}_Night")
         else:
             existing_set_for_display.add(f"{s.shift_date.isoformat()}_{s.shift_type}")
-    # --- END OF FIX ---
 
 
     if request.method == 'POST':
-        # If the submission window is not open, flash an error and re-render the page
-        # The existing_set_for_display is already defined at the top, so it's available.
         if not is_submission_window_open:
-            flash(f"Availability can only be submitted from {submission_window_start|to_local_time('%A, %b %d at %I:%M %p')} to {submission_window_end|to_local_time('%I:%M %p')} (your local time). Window is currently closed.", 'danger')
+            flash(f"Availability can only be submitted from {submission_window_start|to_local_time('%A, %b %d at %I:%M %p')} to {submission_window_end|to_local_time('%A, %b %d at %I:%M %p')} (your local time). Window is currently closed.", 'danger')
             return render_template('submit_shifts.html',
                                    week_dates=next_week_dates,
                                    shift_types=staff_submission_shift_types,
-                                   existing_set=existing_set_for_display, # Now correctly defined
+                                   existing_set=existing_set_for_display,
                                    today=current_today,
                                    is_submission_window_open=is_submission_window_open,
-                                   submission_window_start=submission_window_start,
-                                   submission_window_end=submission_window_end,
-                                   time_until_window_opens=time_until_window_opens,
-                                   time_until_window_closes=time_until_window_closes)
+                                   submission_window_start=submission_window_start.isoformat(), # Pass ISO format
+                                   submission_window_end=submission_window_end.isoformat()) # Pass ISO format
 
 
         submitted_shifts_raw = request.form.getlist('shifts')
@@ -2825,13 +3511,11 @@ def submit_shifts():
                 return render_template('submit_shifts.html',
                                    week_dates=next_week_dates,
                                    shift_types=staff_submission_shift_types,
-                                   existing_set=existing_set_for_display, # Now correctly defined
+                                   existing_set=existing_set_for_display,
                                    today=current_today,
                                    is_submission_window_open=is_submission_window_open,
-                                   submission_window_start=submission_window_start,
-                                   submission_window_end=submission_window_end,
-                                   time_until_window_opens=time_until_window_opens,
-                                   time_until_window_closes=time_until_window_closes)
+                                   submission_window_start=submission_window_start.isoformat(),
+                                   submission_window_end=submission_window_end.isoformat())
 
 
             if date_str not in processed_shifts:
@@ -2863,96 +3547,39 @@ def submit_shifts():
                 return render_template('submit_shifts.html',
                                    week_dates=next_week_dates,
                                    shift_types=staff_submission_shift_types,
-                                   existing_set=existing_set_for_display, # Now correctly defined
+                                   existing_set=existing_set_for_display,
                                    today=current_today,
                                    is_submission_window_open=is_submission_window_open,
-                                   submission_window_start=submission_window_start,
-                                   submission_window_end=submission_window_end,
-                                   time_until_window_opens=time_until_window_opens,
-                                   time_until_window_closes=time_until_window_closes)
+                                   submission_window_start=submission_window_start.isoformat(),
+                                   submission_window_end=submission_window_end.isoformat())
 
         db.session.commit()
         log_activity(f"Updated their shift availability, consolidating Day+Night to Double where applicable.")
         flash('Your shift availability has been submitted successfully!', 'success')
         return redirect(url_for('dashboard'))
 
-    # This is the original GET request block. It now implicitly uses
-    # the variables defined at the top of the function.
     return render_template('submit_shifts.html',
                            week_dates=next_week_dates,
                            shift_types=staff_submission_shift_types,
-                           existing_set=existing_set_for_display, # Now correctly defined
+                           existing_set=existing_set_for_display,
                            today=current_today,
                            is_submission_window_open=is_submission_window_open,
-                           submission_window_start=submission_window_start,
-                           submission_window_end=submission_window_end,
-                           time_until_window_opens=time_until_window_opens,
-                           time_until_window_closes=time_until_window_closes)
+                           submission_window_start=submission_window_start.isoformat(), # Pass ISO format
+                           submission_window_end=submission_window_end.isoformat()) # Pass ISO format
 
 @app.route('/scheduler/bartenders', methods=['GET', 'POST'])
 @login_required
 @role_required(['scheduler', 'manager', 'general_manager', 'system_admin'])
 def scheduler_bartenders():
     if request.method == 'POST':
-        start_of_week, week_dates, end_of_week, _ = _build_week_dates()
-        users_in_role = User.query.join(User.roles).filter(Role.name == 'bartender', User.is_suspended == False).all()
-        user_ids_in_role = [u.id for u in users_in_role]
+        success = _process_schedule_post_request('bartender', request.form)
+        if success:
+            return redirect(url_for('scheduler_bartenders'))
+        else:
+            # If there was an error, re-render the page with the current data and flash messages
+            # This will allow the user to see the error and try again without losing form data (if preserved by browser)
+            return _render_scheduler_for_role('bartender', 'Bartender')
 
-        try:
-            Schedule.query.filter(
-                Schedule.shift_date >= start_of_week,
-                Schedule.shift_date <= end_of_week,
-                Schedule.user_id.in_(user_ids_in_role) if user_ids_in_role else False
-            ).delete(synchronize_session=False)
-            db.session.flush()
-
-            for user in users_in_role:
-                for day in week_dates:
-                    assigned_shift_type = request.form.get(f'assignment_{day.isoformat()}_{user.id}')
-
-                    if assigned_shift_type and assigned_shift_type != "":
-                        start_time_str = None
-                        end_time_str = None
-
-                        # These shift types require custom time input
-                        if assigned_shift_type in ['Split Double', 'Double A', 'Double B']:
-                            start_time_str = request.form.get(f'assignment_{day.isoformat()}_{user.id}_start_time')
-                            end_time_str = request.form.get(f'assignment_{day.isoformat()}_{user.id}_end_time')
-
-                            # Validate for custom times
-                            if not start_time_str or not end_time_str:
-                                flash(f"Start and End times are required for {assigned_shift_type} on {day.strftime('%a, %b %d')} for {user.full_name}.", 'danger')
-                                raise ValueError("Custom shift times missing")
-
-                        # For 'Double A' and 'Double B', the start time is also defined,
-                        # so we need to ensure it's captured if we *don't* want the default.
-                        # For now, if specified via form, we use form. If not, the template/display logic
-                        # will use the ROLE_SHIFT_DEFINITIONS for display, but it's stored.
-                        # The client-side logic ensures start_time_str is submitted for these if chosen.
-
-                        s = Schedule(
-                            shift_date=day,
-                            assigned_shift=assigned_shift_type,
-                            user_id=user.id,
-                            published=(request.form.get('action') == 'publish'),
-                            start_time_str=start_time_str, # Store custom times
-                            end_time_str=end_time_str      # Store custom times
-                        )
-                        db.session.add(s)
-
-            db.session.commit()
-            if request.form.get('action') == 'publish':
-                flash('Bartender schedule saved and published.', 'success')
-            else:
-                flash('Bartender schedule draft saved.', 'info')
-        except ValueError as ve:
-            db.session.rollback()
-            flash(f'Failed to save bartender schedule: {ve}', 'danger')
-        except Exception as e:
-            db.session.rollback()
-            flash(f'Failed to save bartender schedule: {e}', 'danger')
-
-        return redirect(url_for('scheduler_bartenders'))
     return _render_scheduler_for_role('bartender', 'Bartender')
 
 @app.route('/scheduler/waiters', methods=['GET', 'POST'])
@@ -2960,61 +3587,14 @@ def scheduler_bartenders():
 @role_required(['scheduler', 'manager', 'general_manager', 'system_admin'])
 def scheduler_waiters():
     if request.method == 'POST':
-        start_of_week, week_dates, end_of_week, _ = _build_week_dates()
-        users_in_role = User.query.join(User.roles).filter(Role.name == 'waiter', User.is_suspended == False).all()
-        user_ids_in_role = [u.id for u in users_in_role]
+        success = _process_schedule_post_request('waiter', request.form)
+        if success:
+            return redirect(url_for('scheduler_waiters'))
+        else:
+            # If there was an error, re-render the page with the current data and flash messages
+            # This will allow the user to see the error and try again without losing form data (if preserved by browser)
+            return _render_scheduler_for_role('waiter', 'Waiter')
 
-        try:
-            Schedule.query.filter(
-                Schedule.shift_date >= start_of_week,
-                Schedule.shift_date <= end_of_week,
-                Schedule.user_id.in_(user_ids_in_role) if user_ids_in_role else False
-            ).delete(synchronize_session=False)
-            db.session.flush()
-
-            for user in users_in_role:
-                for day in week_dates:
-                    assigned_shift_type = request.form.get(f'assignment_{day.isoformat()}_{user.id}')
-
-                    if assigned_shift_type and assigned_shift_type != "":
-                        start_time_str = None
-                        end_time_str = None
-
-                        # Waiters only have 'Double' with fixed times.
-                        # However, if 'Split Double' were added later, this would need updating.
-                        # Currently, no waiter shifts require custom time input through the modal.
-                        # For future proofing or if 'Split Double' is added for waiters, this block would activate.
-                        # For now, it will only process default fixed times.
-                        if assigned_shift_type == 'Split Double': # Assuming 'Split Double' is NOT in waiter definition, but checking for it.
-                            start_time_str = request.form.get(f'assignment_{day.isoformat()}_{user.id}_start_time')
-                            end_time_str = request.form.get(f'assignment_{day.isoformat()}_{user.id}_end_time')
-                            if not start_time_str or not end_time_str:
-                                flash(f"Start and End times are required for Split Double on {day.strftime('%a, %b %d')} for {user.full_name}.", 'danger')
-                                raise ValueError("Split Double times missing")
-                        
-                        s = Schedule(
-                            shift_date=day,
-                            assigned_shift=assigned_shift_type,
-                            user_id=user.id,
-                            published=(request.form.get('action') == 'publish'),
-                            start_time_str=start_time_str, # Will be None for most waiter shifts
-                            end_time_str=end_time_str      # Will be None for most waiter shifts
-                        )
-                        db.session.add(s)
-
-            db.session.commit()
-            if request.form.get('action') == 'publish':
-                flash('Waiter schedule saved and published.', 'success')
-            else:
-                flash('Waiter schedule draft saved.', 'info')
-        except ValueError as ve:
-            db.session.rollback()
-            flash(f'Failed to save waiter schedule: {ve}', 'danger')
-        except Exception as e:
-            db.session.rollback()
-            flash(f'Failed to save waiter schedule: {e}', 'danger')
-
-        return redirect(url_for('scheduler_waiters'))
     return _render_scheduler_for_role('waiter', 'Waiter')
 
 @app.route('/scheduler/skullers', methods=['GET', 'POST'])
@@ -3022,120 +3602,29 @@ def scheduler_waiters():
 @role_required(['scheduler', 'manager', 'general_manager', 'system_admin'])
 def scheduler_skullers():
     if request.method == 'POST':
-        start_of_week, week_dates, end_of_week, _ = _build_week_dates()
-        users_in_role = User.query.join(User.roles).filter(Role.name == 'skullers', User.is_suspended == False).all()
-        user_ids_in_role = [u.id for u in users_in_role]
+        success = _process_schedule_post_request('skullers', request.form)
+        if success:
+            return redirect(url_for('scheduler_skullers'))
+        else:
+            # If there was an error, re-render the page with the current data and flash messages
+            # This will allow the user to see the error and try again without losing form data (if preserved by browser)
+            return _render_scheduler_for_role('skullers', 'Skuller')
 
-        try:
-            Schedule.query.filter(
-                Schedule.shift_date >= start_of_week,
-                Schedule.shift_date <= end_of_week,
-                Schedule.user_id.in_(user_ids_in_role) if user_ids_in_role else False
-            ).delete(synchronize_session=False)
-            db.session.flush()
-
-            for user in users_in_role:
-                for day in week_dates:
-                    assigned_shift_type = request.form.get(f'assignment_{day.isoformat()}_{user.id}')
-
-                    if assigned_shift_type and assigned_shift_type != "":
-                        start_time_str = None
-                        end_time_str = None
-
-                        # These shift types require custom time input for Skullers
-                        if assigned_shift_type in ['Split Double', 'Double A', 'Double B']: # Skullers may have Double A/B if added to ROLE_SHIFT_DEFINITIONS
-                            start_time_str = request.form.get(f'assignment_{day.isoformat()}_{user.id}_start_time')
-                            end_time_str = request.form.get(f'assignment_{day.isoformat()}_{user.id}_end_time')
-                            if not start_time_str or not end_time_str:
-                                flash(f"Start and End times are required for {assigned_shift_type} on {day.strftime('%a, %b %d')} for {user.full_name}.", 'danger')
-                                raise ValueError("Custom shift times missing")
-
-                        s = Schedule(
-                            shift_date=day,
-                            assigned_shift=assigned_shift_type,
-                            user_id=user.id,
-                            published=(request.form.get('action') == 'publish'),
-                            start_time_str=start_time_str,
-                            end_time_str=end_time_str
-                        )
-                        db.session.add(s)
-
-            db.session.commit()
-            if request.form.get('action') == 'publish':
-                flash('Skuller schedule saved and published.', 'success')
-            else:
-                flash('Skuller schedule draft saved.', 'info')
-        except ValueError as ve:
-            db.session.rollback()
-            flash(f'Failed to save skuller schedule: {ve}', 'danger')
-        except Exception as e:
-            db.session.rollback()
-            flash(f'Failed to save skuller schedule: {e}', 'danger')
-
-        return redirect(url_for('scheduler_skullers'))
     return _render_scheduler_for_role('skullers', 'Skuller')
-
 
 @app.route('/scheduler/managers', methods=['GET', 'POST'])
 @login_required
 @role_required(['scheduler', 'manager', 'general_manager', 'system_admin'])
 def scheduler_managers():
     if request.method == 'POST':
-        start_of_week, week_dates, end_of_week, _ = _build_week_dates()
-        # For managers, include general managers and system admins in the schedule
-        users_in_role = User.query.join(User.roles).filter(
-            or_(Role.name == 'manager', Role.name == 'general_manager', Role.name == 'system_admin'),
-            User.is_suspended == False
-        ).all()
-        user_ids_in_role = [u.id for u in users_in_role]
+        success = _process_schedule_post_request('manager', request.form)
+        if success:
+            return redirect(url_for('scheduler_managers'))
+        else:
+            # If there was an error, re-render the page with the current data and flash messages
+            # This will allow the user to see the error and try again without losing form data (if preserved by browser)
+            return _render_scheduler_for_role('manager', 'Manager')
 
-        try:
-            Schedule.query.filter(
-                Schedule.shift_date >= start_of_week,
-                Schedule.shift_date <= end_of_week,
-                Schedule.user_id.in_(user_ids_in_role) if user_ids_in_role else False
-            ).delete(synchronize_session=False)
-            db.session.flush()
-
-            for user in users_in_role:
-                for day in week_dates:
-                    assigned_shift_type = request.form.get(f'assignment_{day.isoformat()}_{user.id}')
-
-                    if assigned_shift_type and assigned_shift_type != "":
-                        start_time_str = None
-                        end_time_str = None
-
-                        # These shift types require custom time input for managers/admins
-                        if assigned_shift_type in ['Split Double', 'Double A', 'Double B']: # Managers may have Double A/B if added to ROLE_SHIFT_DEFINITIONS
-                            start_time_str = request.form.get(f'assignment_{day.isoformat()}_{user.id}_start_time')
-                            end_time_str = request.form.get(f'assignment_{day.isoformat()}_{user.id}_end_time')
-                            if not start_time_str or not end_time_str:
-                                flash(f"Start and End times are required for {assigned_shift_type} on {day.strftime('%a, %b %d')} for {user.full_name}.", 'danger')
-                                raise ValueError("Custom shift times missing")
-
-                        s = Schedule(
-                            shift_date=day,
-                            assigned_shift=assigned_shift_type,
-                            user_id=user.id,
-                            published=(request.form.get('action') == 'publish'),
-                            start_time_str=start_time_str,
-                            end_time_str=end_time_str
-                        )
-                        db.session.add(s)
-
-            db.session.commit()
-            if request.form.get('action') == 'publish':
-                flash('Manager schedule saved and published.', 'success')
-            else:
-                flash('Manager schedule draft saved.', 'info')
-        except ValueError as ve:
-            db.session.rollback()
-            flash(f'Failed to save manager schedule: {ve}', 'danger')
-        except Exception as e:
-            db.session.rollback()
-            flash(f'Failed to save manager schedule: {e}', 'danger')
-
-        return redirect(url_for('scheduler_managers'))
     return _render_scheduler_for_role('manager', 'Manager')
 
 
@@ -3150,13 +3639,12 @@ def scheduler():
         return redirect(url_for('scheduler_waiters'))
     if current_user.has_role('skullers'): # ADDED 'skullers'
         return redirect(url_for('scheduler_skullers'))
-    
+
     # Users with general scheduling/management permissions default to the manager scheduler.
     if (current_user.has_role('scheduler') or
-        current_user.has_role('manager') or
         current_user.has_role('general_manager') or
         current_user.has_role('system_admin')):
-        return redirect(url_for('scheduler_managers'))
+        return redirect(url_for('scheduler_bartenders'))
 
     flash('Access denied. You do not have permission to view the scheduler.', 'danger')
     return redirect(url_for('dashboard'))
@@ -3209,7 +3697,7 @@ def my_schedule():
 
         bartender_users_for_display = []
         skuller_users_for_display = []
-        staff_users_for_display_generic = [] 
+        staff_users_for_display_generic = []
         manager_users_for_display = []
 
         if view_type == 'boh':
@@ -3220,7 +3708,7 @@ def my_schedule():
             non_manager_target_roles = [r for r in target_roles if r not in ['manager', 'general_manager']]
             if non_manager_target_roles:
                 staff_users_for_display_generic = User.query.join(User.roles).filter(Role.name.in_(non_manager_target_roles)).order_by(User.full_name).all()
-            
+
             combined_staff_for_query = staff_users_for_display_generic
         else:
             combined_staff_for_query = []
@@ -3228,17 +3716,17 @@ def my_schedule():
         manager_users_for_display = User.query.join(User.roles).filter(
             Role.name.in_(['manager', 'general_manager'])
         ).order_by(User.full_name).all()
-        
+
 
         all_users_involved_for_schedule = combined_staff_for_query + manager_users_for_display
         all_user_ids_for_query = [u.id for u in all_users_involved_for_schedule]
-        
+
         all_shifts = shifts_query.filter(Schedule.user_id.in_(all_user_ids_for_query)).all() if all_user_ids_for_query else []
 
         schedule_by_user = {}
         for user in all_users_involved_for_schedule:
             schedule_by_user[user.id] = {day: [] for day in week_dates}
-        
+
         for shift in all_shifts:
             if shift.user_id in schedule_by_user:
                 schedule_by_user[shift.user_id].setdefault(shift.shift_date, []).append(shift)
@@ -3319,7 +3807,7 @@ def my_schedule():
             staff_schedules_for_week[staff_user.id][shift.shift_date.isoformat()].append(
                 {'id': shift.id, 'assigned_shift': shift.assigned_shift, 'shift_date': shift.shift_date.isoformat()}
             )
-    
+
     current_user_roles_list = [role.name for role in current_user.roles]
 
     return render_template(
@@ -3349,12 +3837,12 @@ def volunteer_for_shift():
         return redirect(url_for('dashboard'))
 
     v_shift = VolunteeredShift.query.get_or_404(volunteered_shift_id)
-    
+
     # 1. Basic validation: Is the shift still open and not by current user?
     if v_shift.status != 'Open':
         flash('This shift is no longer open for volunteers.', 'danger')
         return redirect(url_for('dashboard'))
-    
+
     if v_shift.requester_id == current_user.id:
         flash('You cannot volunteer for a shift you relinquished.', 'danger')
         return redirect(url_for('dashboard'))
@@ -3375,7 +3863,7 @@ def volunteer_for_shift():
         for s in current_user_scheduled_shifts_raw
     }
     current_user_roles = current_user.role_names
-    
+
     requester_roles = v_shift.requester.role_names
     has_matching_role = any(role in requester_roles for role in current_user_roles)
     if not has_matching_role:
@@ -3384,7 +3872,7 @@ def volunteer_for_shift():
 
     shift_date_iso = v_shift.schedule.shift_date.isoformat()
     assigned_shifts_on_day = current_user_schedule_this_week.get(shift_date_iso, set())
-    
+
     conflict = False
     requested_shift_type = v_shift.schedule.assigned_shift
 
@@ -3394,7 +3882,7 @@ def volunteer_for_shift():
     else:
         if 'Double' in assigned_shifts_on_day or requested_shift_type in assigned_shifts_on_day:
             conflict = True
-            
+
     if conflict:
         flash(f"You have a conflicting shift on {v_shift.schedule.shift_date.strftime('%a, %b %d')} and cannot volunteer.", 'danger')
         return redirect(url_for('dashboard'))
@@ -3402,7 +3890,7 @@ def volunteer_for_shift():
 
     # 4. Record the volunteer
     v_shift.volunteers.append(current_user) # Add current_user to the volunteers relationship
-    
+
     # Optional: Change status if first volunteer or if it should go to approval immediately
     # For now, keep it 'Open' until a manager acts. Managers will see who volunteered.
     # v_shift.status = 'PendingApproval' # Could be an option if desired
@@ -3444,24 +3932,20 @@ def leave_requests():
 
         doc_path = None
         if document and document.filename != '':
-            # NEW: Upload to Google Drive instead of local file system
             filename = secure_filename(f"leave_request_{current_user.id}_{datetime.utcnow().timestamp()}_{document.filename}")
-            
-            # Read the file content into an in-memory buffer
+
             file_stream = io.BytesIO(document.read())
-            
-            # Use mimetypes to determine the file type
+
             import mimetypes
             mimetype = mimetypes.guess_type(document.filename)[0] or 'application/octet-stream'
 
-            drive_link = upload_file_to_drive(file_stream, filename, mimetype)
+            # MODIFIED: Pass the specific leave documents subfolder ID
+            drive_link = upload_file_to_drive(file_stream, filename, mimetype, parent_folder_id=app.config['GOOGLE_DRIVE_LEAVE_DOCS_FOLDER_ID'])
             if drive_link:
-                doc_path = drive_link # Store the Google Drive link
+                doc_path = drive_link
             else:
-                # If upload failed, flash an error and don't save the request with a document
                 flash('Failed to upload supporting document to Google Drive. Please try again.', 'danger')
                 return redirect(url_for('leave_requests'))
-            # END NEW
 
         new_request = LeaveRequest(user_id=current_user.id, start_date=start_date, end_date=end_date, reason=reason, document_path=doc_path)
         db.session.add(new_request)
@@ -3470,11 +3954,11 @@ def leave_requests():
         flash('Your leave request has been submitted for review.', 'success')
         return redirect(url_for('leave_requests'))
 
-    if current_user.has_role('manager') or current_user.has_role('general_manager') or current_user.has_role('system_admin'): # Also allow system_admin to view all
+    if current_user.has_role('manager') or current_user.has_role('general_manager') or current_user.has_role('system_admin'):
         all_requests = LeaveRequest.query.order_by(LeaveRequest.timestamp.desc()).all()
     else:
         all_requests = LeaveRequest.query.filter_by(user_id=current_user.id).order_by(LeaveRequest.timestamp.desc()).all()
-        
+
     return render_template('leave_requests.html', requests=all_requests)
 
 @app.route('/leave-requests/update/<int:req_id>/<string:status>', methods=['POST'])
@@ -3482,7 +3966,7 @@ def leave_requests():
 @role_required(['manager', 'general_manager', 'system_admin'])
 def update_leave_status(req_id, status):
     leave_req = LeaveRequest.query.get_or_404(req_id)
-    
+
     if leave_req.user_id == current_user.id:
         flash('You cannot approve or deny your own leave request.', 'danger')
         return redirect(url_for('leave_requests'))
@@ -3507,7 +3991,7 @@ def view_leave_document(req_id):
             current_user.has_role('system_admin')):
         flash('Access Denied: You are not authorized to view this document.', 'danger')
         return redirect(url_for('leave_requests'))
-    
+
     if leave_req.document_path:
         # Redirect directly to the Google Drive link
         return redirect(leave_req.document_path)
@@ -3532,7 +4016,7 @@ def submit_new_swap_request():
     if schedule_item.user_id != current_user.id:
         flash('You can only request to swap your own shifts.', 'danger')
         return redirect(url_for('my_schedule', view='personal'))
-    
+
     if not desired_cover_user:
         flash('Selected potential cover staff not found.', 'danger')
         return redirect(url_for('my_schedule', view='personal'))
@@ -3590,7 +4074,7 @@ def relinquish_shift():
     if existing_swap_request:
         flash(f'This shift is already part of a pending swap request (ID: {existing_swap_request.id}).', 'danger')
         return redirect(url_for('my_schedule', view='personal'))
-    
+
     if existing_volunteered_cycle:
         flash(f'This shift is already in a volunteering cycle (Status: {existing_volunteered_cycle.status}).', 'danger')
         return redirect(url_for('my_schedule', view='personal'))
@@ -3642,7 +4126,7 @@ def manage_swaps():
         s for s in ShiftSwapRequest.query.filter_by(status='Pending').order_by(ShiftSwapRequest.timestamp.desc()).all()
         if s.schedule is not None
     ]
-    
+
     # Fetch all potential cover staff once
     all_potential_cover_staff = User.query.join(User.roles).filter(
         Role.name.in_(['bartender', 'waiter', 'skullers']),
@@ -3697,10 +4181,10 @@ def manage_swaps():
                     s['assigned_shift'] == 'Double' or s['assigned_shift'] == requested_shift_type
                     for s in coverer_schedule_for_requested_day
                 )
-            
+
             if not conflict:
                 filtered_staff_for_this_swap.append(potential_cover)
-        
+
         # Attach the filtered staff list to the swap object
         processed_pending_swaps.append({'swap': swap, 'filtered_staff': filtered_staff_for_this_swap})
 
@@ -3722,19 +4206,19 @@ def manage_swaps():
 def update_swap(swap_id):
     swap_request = ShiftSwapRequest.query.get_or_404(swap_id)
     action = request.form.get('action')
-    
+
     schedule_item = swap_request.schedule
     requester = swap_request.requester
-    
+
     notification_title = ""
     notification_message = ""
-    
+
     if action == 'Deny':
         swap_request.status = 'Denied'
         notification_title = "Shift Swap Request Denied"
         notification_message = f"Your request to swap the {schedule_item.assigned_shift} shift on {schedule_item.shift_date.strftime('%a, %b %d')} has been denied."
         # No general announcement for deny, only individual notification (handled by flash to requester)
-        
+
         flash('Shift swap request has been denied.', 'warning')
         log_activity(f"Denied shift swap request #{swap_request.id} for {requester.full_name}'s shift on {schedule_item.shift_date}.")
 
@@ -3743,7 +4227,7 @@ def update_swap(swap_id):
         if not coverer_id:
             flash('You must select a staff member to cover the shift to approve.', 'danger')
             return redirect(url_for('manage_swaps'))
-        
+
         coverer = User.query.get(int(coverer_id))
         if not coverer:
             flash('Selected cover staff not found.', 'danger')
@@ -3751,12 +4235,12 @@ def update_swap(swap_id):
 
         swap_request.status = 'Approved'
         swap_request.coverer_id = coverer.id
-        
+
         schedule_item.user_id = coverer.id
-        
+
         notification_title = "Shift Swap Request Approved"
         notification_message = f"The {schedule_item.assigned_shift} shift on {schedule_item.shift_date.strftime('%a, %b %d')} is now covered by {coverer.full_name}. Original assignee: {requester.full_name}."
-        
+
         # Create an urgent announcement for all relevant roles for approval
         general_announcement = Announcement(
             user_id=current_user.id, # Manager who made the decision
@@ -3765,7 +4249,7 @@ def update_swap(swap_id):
             category='Urgent' # Important notification for all affected
         )
         db.session.add(general_announcement) # Add to session
-        
+
         flash('Shift swap approved and schedule has been updated.', 'success')
         log_activity(f"Approved shift swap request #{swap_request.id}: {coverer.full_name} now covers {requester.full_name}'s shift on {schedule_item.shift_date}.")
 
@@ -3778,7 +4262,7 @@ def update_swap(swap_id):
         # a dedicated UserNotification table or similar. For now, the "flash" mechanism
         # is the most direct way to get a message to the user on their next page load.
         pass # Flash already handled, no new Announcement for Deny to broad audience
-    
+
     return redirect(url_for('manage_swaps'))
 
 @app.route('/api/staff-for-swaps')
@@ -3789,12 +4273,201 @@ def api_staff_for_swaps():
         Role.name.in_(['bartender', 'waiter', 'skullers']),
         User.is_suspended == False # Exclude suspended users
     ).order_by(User.full_name).all()
-    
+
     # You might want to filter out users on approved leave for the specific week
     # This would require passing the week's dates to this API or filtering client-side.
     # For simplicity, we'll just exclude suspended for now.
 
     return jsonify([{'id': u.id, 'full_name': u.full_name} for u in staff])
+
+@app.route('/api/dashboard/open-shifts')
+@login_required
+@role_required(['bartender', 'waiter', 'skullers'])
+def api_dashboard_open_shifts():
+    if current_user.is_suspended:
+        return jsonify([]) # No open shifts if suspended
+
+    open_shifts_for_volunteering = []
+    # 1. Get all shifts currently open for volunteering
+    all_open_volunteered_shifts = VolunteeredShift.query.filter_by(status='Open').all()
+
+    # 2. Get current_user's schedule for the week to check for conflicts
+    _, week_dates, _, _ = _build_week_dates()
+    current_user_scheduled_shifts_raw = Schedule.query.filter(
+        Schedule.user_id == current_user.id,
+        Schedule.shift_date.in_(week_dates)
+    ).all()
+    current_user_schedule_this_week = {
+        s.shift_date.isoformat(): {shift.assigned_shift for shift in current_user_scheduled_shifts_raw if shift.shift_date.isoformat() == s.shift_date.isoformat()}
+        for s in current_user_scheduled_shifts_raw
+    }
+
+    current_user_roles = current_user.role_names
+
+    for v_shift in all_open_volunteered_shifts:
+        if v_shift.requester_id == current_user.id:
+            continue
+
+        requester_roles = v_shift.requester.role_names
+        has_matching_role = any(role in requester_roles for role in current_user_roles)
+        if not has_matching_role:
+            continue
+
+        shift_date_iso = v_shift.schedule.shift_date.isoformat()
+        assigned_shifts_on_day = current_user_schedule_this_week.get(shift_date_iso, set())
+
+        conflict = False
+        requested_shift_type = v_shift.schedule.assigned_shift
+
+        if requested_shift_type == 'Double':
+            if assigned_shifts_on_day:
+                conflict = True
+        else:
+            if 'Double' in assigned_shifts_on_day or requested_shift_type in assigned_shifts_on_day:
+                conflict = True
+
+        already_volunteered = any(v.id == current_user.id for v in v_shift.volunteers)
+
+        if not conflict and not already_volunteered:
+            open_shifts_for_volunteering.append({
+                'id': v_shift.id,
+                'assigned_shift': v_shift.schedule.assigned_shift,
+                'shift_date': v_shift.schedule.shift_date.strftime('%a, %b %d'),
+                'requester_full_name': v_shift.requester.full_name,
+                'relinquish_reason': v_shift.relinquish_reason
+            })
+    return jsonify(open_shifts_for_volunteering)
+
+
+@app.route('/api/dashboard/admin-alerts')
+@login_required
+@role_required(['system_admin'])
+def api_dashboard_admin_alerts():
+    password_reset_requests = User.query.filter_by(password_reset_requested=True).all()
+    reset_requests_data = [{
+        'id': user.id,
+        'full_name': user.full_name,
+        'username': user.username
+    } for user in password_reset_requests]
+    return jsonify(reset_requests_data)
+
+
+@app.route('/api/dashboard/activity-logs')
+@login_required
+@role_required(['system_admin'])
+def api_dashboard_activity_logs():
+    activity_logs = ActivityLog.query.order_by(ActivityLog.timestamp.desc()).limit(20).all()
+    logs_data = [{
+        'user_full_name': log.user.full_name,
+        'user_username': log.user.username,
+        'action': log.action,
+        'timestamp': log.timestamp.isoformat() # Use ISO format for easy JS parsing
+    } for log in activity_logs]
+    return jsonify(logs_data)
+
+
+@app.route('/api/dashboard/latest-announcement')
+@login_required
+def api_dashboard_latest_announcement():
+    user_roles_ids = [role.id for role in current_user.roles]
+    # Replicate the announcement filtering logic from inject_global_data
+    filtered_announcements_query = Announcement.query.outerjoin(Announcement.target_roles) \
+                                                  .filter(or_(
+                                                      db.not_(Announcement.target_roles.any()),
+                                                      Role.id.in_(user_roles_ids)
+                                                  )) \
+                                                  .distinct()
+
+    latest_announcement = filtered_announcements_query.order_by(Announcement.id.desc()).first()
+
+    if latest_announcement:
+        return jsonify({
+            'title': latest_announcement.title,
+            'message': latest_announcement.message,
+            'action_link': latest_announcement.action_link,
+            'id': latest_announcement.id # Needed for dismiss button if implemented
+        })
+    return jsonify(None)
+
+
+@app.route('/api/dashboard/variance-alerts')
+@login_required
+@role_required(['manager', 'general_manager', 'system_admin', 'owners'])
+def api_dashboard_variance_alerts():
+    today_date = datetime.utcnow().date()
+    yesterday = today_date - timedelta(days=1)
+
+    bod_submitted = BeginningOfDay.query.filter_by(date=today_date).first() is not None
+
+    if not bod_submitted:
+        return jsonify({'bod_submitted': False, 'alerts': []})
+
+    bod_counts = {b.product_id: b.amount for b in BeginningOfDay.query.filter_by(date=today_date).all()}
+    sales_counts = {s.product_id: s.quantity_sold for s in Sale.query.filter_by(date=yesterday).all()}
+    # Fetch today's deliveries for accurate expected EOD
+    todays_deliveries = {
+        d.product_id: d.quantity
+        for d in Delivery.query.filter_by(delivery_date=today_date).all()
+    }
+    # Fetch today's cocktail usage for accurate expected EOD
+    cocktail_usage_today = _calculate_ingredient_usage_from_cocktails_sold(today_date)
+
+    products = Product.query.all()
+    # Get latest actual counts for today
+    eod_latest_count_objects = {}
+    all_counts_on_today = Count.query.filter(func.date(Count.timestamp) == today_date).all()
+    for count in all_counts_on_today:
+        product_id = count.product_id
+        if product_id not in eod_latest_count_objects or count.timestamp > eod_latest_count_objects[product_id].timestamp:
+            eod_latest_count_objects[product_id] = count
+
+    alerts = []
+    for product in products:
+        bod = bod_counts.get(product.id, 0.0)
+        deliveries = todays_deliveries.get(product.id, 0.0)
+        manual_sales = sales_counts.get(product.id, 0.0)
+        cocktail_usage = cocktail_usage_today.get(product.id, 0.0)
+
+        expected_eod = bod + deliveries - manual_sales - cocktail_usage
+        expected_eod = max(0.0, expected_eod) # Ensure non-negative
+
+        latest_count_obj = eod_latest_count_objects.get(product.id)
+
+        variance_val = None
+        if latest_count_obj and latest_count_obj.variance_amount is not None:
+            variance_val = latest_count_obj.variance_amount
+        elif latest_count_obj: # If actual count exists but variance wasn't saved, calculate
+             variance_val = latest_count_obj.amount - expected_eod
+
+        if variance_val is not None and variance_val != 0:
+            alerts.append({'name': product.name, 'variance': round(variance_val, 2)}) # Round for display
+
+    return jsonify({'bod_submitted': bod_submitted, 'alerts': alerts})
+
+
+@app.route('/api/dashboard/location-statuses')
+@login_required
+# This should be accessible to all roles that perform counts
+@role_required(['manager', 'general_manager', 'system_admin', 'bartender', 'waiter', 'skullers'])
+def api_dashboard_location_statuses():
+    today_date = datetime.utcnow().date()
+    bod_submitted = BeginningOfDay.query.filter_by(date=today_date).first() is not None
+
+    locations = Location.query.order_by(Location.name).all()
+    location_statuses_data = []
+
+    for loc in locations:
+        latest_count = Count.query.filter(Count.location == loc.name, func.date(Count.timestamp) == today_date).order_by(Count.timestamp.desc()).first()
+        status = 'not_started'
+        if latest_count:
+            status = 'corrected' if latest_count.count_type == 'Corrections Count' else 'counted'
+
+        location_statuses_data.append({
+            'name': loc.name,
+            'slug': loc.name.replace(' ', '_').lower(),
+            'status': status
+        })
+    return jsonify({'bod_submitted': bod_submitted, 'location_statuses': location_statuses_data})
 
 # ==============================================================================
 # Export Routes
@@ -3813,11 +4486,11 @@ def export_daily_summary():
     for product in products:
         total_on_hand = sum(c.amount for c in Count.query.filter(Count.product_id == product.id, func.date(Count.timestamp) == today).all())
         eod_counts[product.id] = total_on_hand
-    
+
     output = io.StringIO()
     writer = csv.writer(output)
     writer.writerow(['Product', 'Unit', 'Beginning of Day', 'Sales', 'Expected On-Hand', 'Actual On-Hand', 'Variance'])
-    
+
     for product in products:
         bod = bod_counts.get(product.id, 0)
         sold = sales_counts.get(product.id, 0)
@@ -3825,7 +4498,7 @@ def export_daily_summary():
         expected = bod - sold
         variance = eod_total - expected
         writer.writerow([product.name, product.unit_of_measure, bod, sold, expected, eod_total, variance])
-        
+
     output.seek(0)
     return Response(output, mimetype="text/csv", headers={"Content-Disposition": f"attachment;filename=daily_summary_{today.strftime('%Y-%m-%d')}.csv"})
 
@@ -3847,11 +4520,11 @@ def export_variance():
             variance_data[key]['correction_amount'] = count.amount
             variance_data[key]['correction_by'] = count.user.full_name
     variance_list = [v for v in variance_data.values() if v.get('correction_amount') is not None and v.get('first_count_amount') != v.get('correction_amount')]
-    
+
     output = io.StringIO()
     writer = csv.writer(output)
     writer.writerow(['Location', 'Product', 'First Count', 'Submitted By', 'Correction', 'Corrected By', 'Difference'])
-    
+
     for item in sorted(variance_list, key=lambda x: (x['location'], x['product_name'])):
         first = item.get('first_count_amount', 0)
         corr = item.get('correction_amount', 0)
@@ -3867,7 +4540,7 @@ def export_variance():
 def export_product_breakdown():
     start_date_str = request.args.get('start_date', '')
     end_date_str = request.args.get('end_date', '')
-    
+
     query = Count.query.join(Product)
     if start_date_str and end_date_str:
         start_date = datetime.strptime(start_date_str, '%Y-%m-%d').date()
@@ -3896,11 +4569,11 @@ def export_product_breakdown():
         expected = 0
         if start_date_str:
             expected = bod_totals.get(p_data['id'], 0) - sales_totals.get(p_data['id'], 0)
-        
+
         for loc, loc_data in p_data['locations'].items():
             final = loc_data.get('corr') if loc_data.get('corr') is not None else loc_data.get('first', 0)
             writer.writerow([p_name, total, expected, loc, final])
-            
+
     output.seek(0)
     return Response(output, mimetype="text/csv", headers={"Content-Disposition": f"attachment;filename=product_breakdown_{start_date_str}_to_{end_date_str}.csv"})
 
@@ -3910,13 +4583,13 @@ def export_product_breakdown():
 def export_schedule():
     today = datetime.utcnow().date()
     week_dates = [today + timedelta(days=i) for i in range(7)]
-    
+
     current_schedule = Schedule.query.filter(Schedule.shift_date.in_(week_dates)).order_by(Schedule.shift_date, Schedule.assigned_shift).all()
 
     output = io.StringIO()
     writer = csv.writer(output)
     writer.writerow(['Date', 'Day', 'Shift', 'Assigned Staff'])
-    
+
     for item in current_schedule:
         writer.writerow([
             item.shift_date.strftime('%Y-%m-%d'),
@@ -3924,7 +4597,7 @@ def export_schedule():
             item.assigned_shift,
             item.user.full_name
         ])
-        
+
     output.seek(0)
     filename = f"schedule_{week_dates[0].strftime('%Y-%m-%d')}_to_{week_dates[-1].strftime('%Y-%m-%d')}.csv"
     return Response(output, mimetype="text/csv", headers={"Content-Disposition": f"attachment;filename={filename}"})
@@ -3970,7 +4643,7 @@ def reinstate_user(user_id):
 
     user_to_reinstate.is_suspended = False
     user_to_reinstate.suspension_end_date = None
-    
+
     # --- Clear suspension document path on reinstate ---
     # MODIFIED: No longer deleting local file, just clearing the path/link
     user_to_reinstate.suspension_document_path = None
@@ -3995,7 +4668,7 @@ def force_logout(user_id):
     if user_id == current_user.id:
         flash("You cannot force your own account to log out.", "danger")
         return redirect(url_for('active_users'))
-    
+
     user_to_logout = User.query.get_or_404(user_id)
 
     is_manager_only = current_user.has_role('manager') and not (current_user.has_role('system_admin') or current_user.has_role('general_manager'))
@@ -4018,7 +4691,7 @@ def manage_users():
     users = User.query.all()
     all_roles = Role.query.order_by(Role.name).all() # Fetch all roles for the filter dropdown
     # Pass today's date for modal's default suspension end date
-    today_date = datetime.utcnow().date() 
+    today_date = datetime.utcnow().date()
     return render_template('manage_users.html', users=users, today_date=today_date, all_roles=all_roles)
 
 @app.route('/users/add', methods=['GET', 'POST'])
@@ -4035,18 +4708,18 @@ def add_user():
             if not set(role_names).issubset(allowed_roles):
                 flash('Managers can only create Bartender, Waiter, and Skullers accounts.', 'danger')
                 return redirect(url_for('add_user'))
-        
+
         new_user = User(username=username, full_name=full_name, password=bcrypt.generate_password_hash(password).decode('utf-8'))
-        
+
         roles = Role.query.filter(Role.name.in_(role_names)).all()
         new_user.roles = roles
-        
+
         log_activity(f"Created new user: '{full_name}' ({username}, {', '.join(role_names)}).")
         db.session.add(new_user)
         db.session.commit()
         flash(f'User "{full_name}" created successfully!', 'success')
         return redirect(url_for('manage_users'))
-    
+
     all_roles = Role.query.all()
     return render_template('add_user.html', all_roles=all_roles)
 
@@ -4082,11 +4755,11 @@ def edit_user(user_id):
             if not (current_user.has_role('system_admin') or current_user.has_role('general_manager') or current_user.has_role('manager')):
                 # Even if they got here, ensure permissions
                 return jsonify({'status': 'danger', 'message': 'Access Denied: Not authorized to manage suspensions.'}), 403
-            
+
             # Ensure suspended status is toggled ON if it's 'suspend_user' action
             if action == 'suspend_user':
                 user_to_edit.is_suspended = True
-            
+
             # Update suspension end date
             suspension_end_date_str = request.form.get('suspension_end_date')
             if suspension_end_date_str:
@@ -4107,7 +4780,7 @@ def edit_user(user_id):
                 import mimetypes
                 mimetype = mimetypes.guess_type(suspension_document_file.filename)[0] or 'application/octet-stream'
 
-                drive_link = upload_file_to_drive(file_stream, filename, mimetype)
+                drive_link = upload_file_to_drive(file_obj, filename, mimetype, parent_folder_id=app.config['GOOGLE_DRIVE_EOD_IMAGES_FOLDER_ID'])
                 if drive_link:
                     user_to_edit.suspension_document_path = drive_link
                     # No need to delete old file if overwriting with a new Drive link
@@ -4115,17 +4788,17 @@ def edit_user(user_id):
                     flash('Failed to upload suspension document to Google Drive.', 'danger')
                     return jsonify({'status': 'danger', 'message': 'Failed to upload document.'}), 500
                 # END NEW
-            
+
             # Handle suspension document deletion checkbox
             delete_doc_requested = request.form.get('delete_suspension_document') == '1'
             if delete_doc_requested and user_to_edit.suspension_document_path:
                 # MODIFIED: Just clear the link, no local file to delete
                 user_to_edit.suspension_document_path = None
                 app.logger.info(f"Cleared suspension document link for user {user_id}.")
-            
+
             db.session.commit()
             log_activity(f"User '{user_to_edit.full_name}' suspension details updated or user suspended.")
-            
+
             # Flash message and return JSON for AJAX modal submission
             flash(f"User '{user_to_edit.full_name}' suspension status and details updated.", 'success')
             return jsonify({'status': 'success', 'message': get_flashed_messages(category_filter=['success'])[0]})
@@ -4142,7 +4815,7 @@ def edit_user(user_id):
 
             user_to_edit.full_name = request.form.get('full_name')
             user_to_edit.username = request.form.get('username')
-            
+
             role_names = request.form.getlist('roles')
             # Business owner cannot assign roles if limited view
             if not current_user.has_role('owners') or (current_user.has_role('system_admin') or current_user.has_role('general_manager')):
@@ -4155,7 +4828,7 @@ def edit_user(user_id):
             if new_password:
                 user_to_edit.password = bcrypt.generate_password_hash(new_password).decode('utf-8')
                 user_to_edit.password_reset_requested = False
-            
+
             db.session.commit()
             log_activity(f"Edited user details for '{user_to_edit.full_name}'.")
             flash('User details updated successfully!', 'success')
@@ -4194,26 +4867,197 @@ def delete_user(user_id):
 # ==============================================================================
 # Product & Location Management Routes
 # ==============================================================================
+
 @app.route('/products', methods=['GET', 'POST'])
 @login_required
 @role_required(['manager', 'general_manager', 'system_admin'])
 def products():
+    # Get current sort/group preferences from URL parameters or session
+    group_by = request.args.get('group_by', session.get('products_group_by', 'none'))
+    sort_by = request.args.get('sort_by', session.get('products_sort_by', 'product_number'))
+    sort_order = request.args.get('sort_order', session.get('products_sort_order', 'asc'))
+    type_filter = request.args.get('type_filter', session.get('products_type_filter', 'all'))
+    search_query = request.args.get('search_query', session.get('products_search_query', ''))
+
+    # Store preferences in session for persistence
+    session['products_group_by'] = group_by
+    session['products_sort_by'] = sort_by
+    session['products_sort_order'] = sort_order
+    session['products_type_filter'] = type_filter
+    session['products_search_query'] = search_query
+
     if request.method == 'POST':
+        # This handles adding a new product
         name, p_type, unit = (request.form.get(k) for k in ['name', 'type', 'unit_of_measure'])
         unit_price = request.form.get('unit_price')
-        # NEW: Retrieve product_number from form
-        product_number = request.form.get('product_number') 
-        
+        product_number = request.form.get('product_number')
+
         new_product = Product(name=name, type=p_type, unit_of_measure=unit,
                               unit_price=float(unit_price) if unit_price else None,
-                              # NEW: Assign product_number
                               product_number=product_number if product_number else None)
         db.session.add(new_product)
         db.session.commit()
         flash('Product added successfully!', 'success')
-        return redirect(url_for('products'))
-    products = Product.query.order_by(Product.type, Product.name).all()
-    return render_template('products.html', products=products)
+
+        # Redirect with parameters to retain the sorting and filters after adding a product
+        return redirect(url_for('products',
+                                group_by=group_by,
+                                sort_by=sort_by,
+                                sort_order=sort_order,
+                                type_filter=type_filter,
+                                search_query=search_query))
+
+    # Handle GET request for viewing products with grouping/sorting/filtering
+    grouped_products = get_products_data(group_by, sort_by, sort_order, type_filter, search_query)
+
+    all_product_types = db.session.query(distinct(Product.type)).order_by(Product.type).all()
+    all_product_types = [t[0] for t in all_product_types]
+
+    return render_template('products.html',
+                           grouped_products=grouped_products,
+                           current_group_by=group_by,
+                           current_sort_by=sort_by,
+                           current_sort_order=sort_order,
+                           current_type_filter=type_filter,
+                           current_search_query=search_query,
+                           all_product_types=all_product_types)
+
+# NEW ROUTE: set_all_stock page
+@app.route('/set_all_stock', methods=['GET', 'POST'])
+@login_required
+@role_required(['manager', 'general_manager', 'system_admin'])
+def set_all_stock():
+    today_date = datetime.utcnow().date()
+    products_query = Product.query.order_by(Product.name) # Start query for products
+
+    # Add search filter if present (e.g., from clicking individual "Set Stock" button)
+    search_query = request.args.get('search_query')
+    if search_query:
+        products_query = products_query.filter(Product.name.ilike(f'%{search_query}%'))
+
+    products = products_query.all()
+
+    # Pre-populate current BOD values
+    existing_bod_map = {
+        bod.product_id: bod
+        for bod in BeginningOfDay.query.filter_by(date=today_date).all()
+    }
+
+    if request.method == 'POST':
+        success_messages = []
+        error_messages = []
+
+        for product in products:
+            stock_value_str = request.form.get(f'stock_value_{product.id}')
+
+            # If the field is empty, it means no change was intended or it was skipped.
+            # Only process if a value was actually entered.
+            if stock_value_str:
+                try:
+                    stock_value = float(stock_value_str)
+                    if stock_value < 0:
+                        error_messages.append(f"Stock for '{product.name}' must be non-negative. Entered: {stock_value_str}.")
+                        continue # Skip to next product
+
+                    existing_bod = existing_bod_map.get(product.id)
+                    if existing_bod:
+                        if existing_bod.amount != stock_value: # Only update if value changed
+                            existing_bod.amount = stock_value
+                            success_messages.append(f"Updated '{product.name}' to {stock_value} {product.unit_of_measure}.")
+                            log_activity(f"Updated initial stock for product '{product.name}' to {stock_value}.")
+                    else:
+                        new_bod = BeginningOfDay(
+                            product_id=product.id,
+                            amount=stock_value,
+                            date=today_date
+                        )
+                        db.session.add(new_bod)
+                        success_messages.append(f"Set '{product.name}' to {stock_value} {product.unit_of_measure}.")
+                        log_activity(f"Set initial stock for product '{product.name}' to {stock_value}.")
+
+                except ValueError:
+                    error_messages.append(f"Invalid stock value for '{product.name}': '{stock_value_str}'. Must be a number.")
+                except Exception as e:
+                    error_messages.append(f"An error occurred updating '{product.name}': {e}")
+                    app.logger.exception(f"Error updating stock for product {product.id} - {product.name}")
+
+        if error_messages:
+            for msg in error_messages:
+                flash(msg, 'danger')
+            db.session.rollback() # Rollback all changes if any error occurred
+        else:
+            db.session.commit()
+            if success_messages:
+                flash("Stock updates saved successfully!", 'success')
+            else:
+                flash("No stock values were changed.", 'info')
+
+        return redirect(url_for('set_all_stock', search_query=search_query)) # Redirect back with search query
+
+    return render_template('set_all_stock.html',
+                           products=products,
+                           existing_bod_map=existing_bod_map,
+                           today_date=today_date,
+                           current_search_query=search_query) # Pass search query to template
+# END NEW ROUTE
+
+
+# --- NEW ROUTE: set_all_prices page ---
+@app.route('/set_all_prices', methods=['GET', 'POST'])
+@login_required
+@role_required(['manager', 'general_manager', 'system_admin'])
+def set_all_prices():
+    # --- Filter/Group/Sort Logic (similar to products route) ---
+    # Get current preferences from URL parameters or session
+    # Defaults should ensure all products are loaded initially
+    group_by = request.args.get('group_by_price', session.get('set_prices_group_by', 'none'))
+    # No sort_by/sort_order needed for set_all_prices client-side sort, but keep if you want server-side initial sort
+    type_filter = request.args.get('type_filter_price', session.get('set_prices_type_filter', 'all'))
+    search_query = request.args.get('search_query_price', session.get('set_prices_search_query', ''))
+
+    # Store preferences in session for persistence
+    session['set_prices_group_by'] = group_by
+    session['set_prices_type_filter'] = type_filter
+    session['set_prices_search_query'] = search_query
+    # --- END Filter/Group/Sort Logic ---
+
+    if request.method == 'POST':
+        # ... (existing POST logic for saving prices - UNCHANGED) ...
+
+        # After POST, redirect with current filter settings to maintain view
+        return redirect(url_for('set_all_prices',
+                                group_by_price=group_by,
+                                type_filter_price=type_filter,
+                                search_query_price=search_query))
+
+    # --- GET request: Populate products for the initial page render ---
+    all_products = Product.query.order_by(Product.name).all() # Fetch all products to pass to JS
+
+    # Get grouped products based on current filter/group settings for initial render
+    # We explicitly pass all products here because the client-side JS handles dynamic filtering
+    # The server-side render should reflect initial filters or show all.
+    # We will pass the full product list and let JS handle the display.
+    # For initial render, group_by_price might be 'none' and type_filter_price 'all' by default.
+    grouped_products = get_products_data(
+        group_by=group_by,
+        sort_by='name', # Default sort for initial render
+        sort_order='asc',
+        type_filter=type_filter,
+        search_query=search_query
+    )
+
+    all_product_types = db.session.query(distinct(Product.type)).order_by(Product.type).all()
+    all_product_types = [t[0] for t in all_product_types]
+
+    # Pre-populate current unit prices to make originalPrice available for JS
+    # This is implicitly done by passing the product objects from grouped_products
+
+    return render_template('set_all_prices.html',
+                           grouped_products=grouped_products, # Passed to Jinja for initial rendering
+                           all_product_types=all_product_types,
+                           current_group_by=group_by,
+                           current_type_filter=type_filter,
+                           current_search_query=search_query)
 
 @app.route('/edit_product/<int:product_id>', methods=['GET', 'POST'])
 @login_required
@@ -4244,64 +5088,6 @@ def delete_product(product_id):
     flash('Product deleted successfully!', 'success')
     return redirect(url_for('products'))
 
-@app.route('/set_product_stock/<int:product_id>', methods=['GET', 'POST'])
-@login_required
-@role_required(['manager', 'general_manager', 'system_admin']) # Only managers/admins can set stock
-def set_product_stock(product_id):
-    product = Product.query.get_or_404(product_id)
-    today_date = datetime.utcnow().date()
-    
-    existing_bod = BeginningOfDay.query.filter_by(product_id=product.id, date=today_date).first()
-    
-    if request.method == 'POST':
-        stock_value = request.form.get('stock_value', type=float)
-
-        if stock_value is None or stock_value < 0:
-            flash('Stock value must be a non-negative number.', 'danger')
-            # The template expects `error_stock_value` on re-render.
-            # We'll re-render the modal content directly for validation errors.
-            return render_template('set_product_stock_modal_content.html', 
-                                   product=product, 
-                                   today_date=today_date, 
-                                   existing_bod=existing_bod, 
-                                   error_stock_value=request.form.get('stock_value'))
-
-
-        if existing_bod:
-            existing_bod.amount = stock_value
-            flash(f'Stock for {product.name} updated to {stock_value} {product.unit_of_measure} for {today_date.strftime("%Y-%m-%d")}.', 'success')
-            log_activity(f"Updated initial stock for product '{product.name}' to {stock_value}.")
-        else:
-            new_bod = BeginningOfDay(
-                product_id=product.id,
-                amount=stock_value,
-                date=today_date
-            )
-            db.session.add(new_bod)
-            flash(f'Initial stock for {product.name} set to {stock_value} {product.unit_of_measure} for {today_date.strftime("%Y-%m-%d")}.', 'success')
-            log_activity(f"Set initial stock for product '{product.name}' to {stock_value}.")
-        
-        db.session.commit()
-        
-        # --- MODIFIED: Correct way to access flashed messages ---
-        # Get the flashed messages. We expect only one success message here.
-        messages = get_flashed_messages(category_filter=['success']) # Only get success messages
-        success_message = messages[0] if messages else "Stock updated successfully."
-        return jsonify({'status': 'success', 'message': success_message})
-    
-    # GET request: Render content for the modal
-    return render_template('set_product_stock_modal_content.html', 
-                           product=product, 
-                           today_date=today_date, 
-                           existing_bod=existing_bod,
-                           error_stock_value=None)
-    
-    # GET request: Render content for the modal
-    return render_template('set_product_stock_modal_content.html', 
-                           product=product, 
-                           today_date=today_date, 
-                           existing_bod=existing_bod,
-                           error_stock_value=None)
 
 @app.route('/locations', methods=['GET', 'POST'])
 @login_required
@@ -4340,41 +5126,50 @@ def assign_products(location_id):
         db.session.commit()
         flash(f'Product list for "{location.name}" has been updated.', 'success')
         return redirect(url_for('manage_locations'))
+
+    # Fetch all products available
     products = Product.query.order_by(Product.type, Product.name).all()
+    # Get IDs of currently assigned products for checkbox pre-selection
     assigned_product_ids = [p.id for p in location.products]
-    return render_template('assign_products.html', location=location, products=products, assigned_product_ids=assigned_product_ids)
+
+    # NEW: Fetch all distinct product types for the filter dropdown
+    all_product_types = db.session.query(distinct(Product.type)).order_by(Product.type).all()
+    all_product_types = [t[0] for t in all_product_types]
+
+
+    return render_template('assign_products.html',
+                           location=location,
+                           products=products,
+                           assigned_product_ids=assigned_product_ids,
+                           all_product_types=all_product_types)
 
 # ==============================================================================
 # API Routes
 # ==============================================================================
 
-@app.route('/OneSignalSDKWorker.js')
-def one_signal_sdk_worker():
-    return send_from_directory('static', 'OneSignalSDKWorker.js')
-
-@app.route('/api/register-onesignal-id', methods=['POST'])
+@app.route('/api/active-users')
 @login_required
-def register_onesignal_id():
-    data = request.get_json()
-    onesignal_player_id = data.get('player_id')
+@role_required(['manager', 'general_manager', 'system_admin', 'owners'])
+def api_active_users():
+    """
+    Returns a JSON list of users who have been active in the last 5 minutes.
+    This endpoint is used by client-side JavaScript for AJAX polling.
+    """
+    five_minutes_ago = datetime.utcnow() - timedelta(minutes=5)
+    users = User.query.filter(User.last_seen > five_minutes_ago).order_by(User.last_seen.desc()).all()
 
-    if not onesignal_player_id:
-        return jsonify({'status': 'error', 'message': 'Missing player_id'}), 400
-
-    # Find or create a PushSubscription for the current user
-    # You might want to remove old subscriptions if a user gets a new player ID
-    # or if you're consolidating to just OneSignal IDs.
-    subscription = PushSubscription.query.filter_by(user_id=current_user.id).first()
-    if subscription:
-        subscription.onesignal_player_id = onesignal_player_id
-        # You might clear other fields (endpoint, p256dh, auth) if fully migrating
-    else:
-        subscription = PushSubscription(user_id=current_user.id, onesignal_player_id=onesignal_player_id)
-        db.session.add(subscription)
-
-    db.session.commit()
-    log_activity(f"Registered OneSignal Player ID {onesignal_player_id} for user {current_user.full_name}.")
-    return jsonify({'status': 'success', 'message': 'OneSignal ID registered.'})
+    users_data = []
+    for user in users:
+        roles_names = [role.name.replace('_', ' ').title() for role in user.roles]
+        users_data.append({
+            'id': user.id,
+            'full_name': user.full_name,
+            'username': user.username,
+            'roles': roles_names,
+            'last_seen': user.last_seen.strftime('%Y-%m-%d %H:%M:%S') + ' UTC',
+            'force_logout_requested': user.force_logout_requested
+        })
+    return jsonify(users_data)
 
 @app.route('/api/latest-announcement')
 @login_required
@@ -4405,13 +5200,13 @@ def mark_announcements_read():
 def variance_history_api(product_id):
     try:
         product = Product.query.get_or_404(product_id)
-        
+
         end_date = datetime.utcnow().date()
         start_date = end_date - timedelta(days=29) # Last 30 days
 
         labels = []
         data_points = []
-        
+
         current_iter_date = start_date
         while current_iter_date <= end_date:
             labels.append(current_iter_date.strftime('%b %d'))
@@ -4455,10 +5250,10 @@ def variance_history_api(product_id):
                 daily_variance = latest_count.amount - expected_eod
             else:
                 # No actual count means no 'actual - expected' variance for this day
-                daily_variance = None 
+                daily_variance = None
 
             data_points.append(daily_variance)
-            
+
             current_iter_date += timedelta(days=1)
 
         return jsonify({'labels': labels, 'data': data_points})
@@ -4470,6 +5265,58 @@ def variance_history_api(product_id):
 # ==============================================================================
 # Google Drive OAuth Routes (NEW for Web Application Flow)
 # ==============================================================================
+
+@app.route('/test-google-drive-access')
+@login_required
+@role_required(['system_admin']) # Only admin should run this
+def test_google_drive_access():
+    try:
+        services = get_drive_service()
+        drive_service = services['drive']
+        sheets_service = services['sheets']
+
+        # Test Sheet Access
+        sheet_id = app.config['EOD_REPORT_SHEET_ID']
+        try:
+            sheet_metadata = drive_service.files().get(fileId=sheet_id, fields='id, name',supportsAllDrives=True).execute()
+            flash(f"SUCCESS: Google Sheet '{sheet_metadata.get('name')}' (ID: {sheet_id}) found and accessible.", 'success')
+        except HttpError as e:
+            flash(f"ERROR: Google Sheet ID {sheet_id} not found or inaccessible. HttpError: {e}", 'danger')
+            app.logger.error(f"Test Sheet Access Error: {e}", exc_info=True)
+        except Exception as e:
+            flash(f"ERROR: Unexpected error accessing Google Sheet ID {sheet_id}: {e}", 'danger')
+            app.logger.error(f"Test Sheet Access Unexpected Error: {e}", exc_info=True)
+
+        # Test EOD Images Folder Access
+        eod_images_folder_id = app.config['GOOGLE_DRIVE_EOD_IMAGES_FOLDER_ID']
+        try:
+            folder_metadata = drive_service.files().get(fileId=eod_images_folder_id, fields='id, name',supportsAllDrives=True).execute()
+            flash(f"SUCCESS: EOD Images Folder '{folder_metadata.get('name')}' (ID: {eod_images_folder_id}) found and accessible.", 'success')
+        except HttpError as e:
+            flash(f"ERROR: EOD Images Folder ID {eod_images_folder_id} not found or inaccessible. HttpError: {e}", 'danger')
+            app.logger.error(f"Test EOD Images Folder Access Error: {e}", exc_info=True)
+        except Exception as e:
+            flash(f"ERROR: Unexpected error accessing EOD Images Folder ID {eod_images_folder_id}: {e}", 'danger')
+            app.logger.error(f"Test EOD Images Folder Unexpected Error: {e}", exc_info=True)
+
+        # Test Leave Docs Folder Access
+        leave_docs_folder_id = app.config['GOOGLE_DRIVE_LEAVE_DOCS_FOLDER_ID']
+        try:
+            folder_metadata = drive_service.files().get(fileId=leave_docs_folder_id, fields='id, name',supportsAllDrives=True).execute()
+            flash(f"SUCCESS: Leave Docs Folder '{folder_metadata.get('name')}' (ID: {leave_docs_folder_id}) found and accessible.", 'success')
+        except HttpError as e:
+            flash(f"ERROR: Leave Docs Folder ID {leave_docs_folder_id} not found or inaccessible. HttpError: {e}", 'danger')
+            app.logger.error(f"Test Leave Docs Folder Access Error: {e}", exc_info=True)
+        except Exception as e:
+            flash(f"ERROR: Unexpected error accessing Leave Docs Folder ID {leave_docs_folder_id}: {e}", 'danger')
+            app.logger.error(f"Test Leave Docs Folder Unexpected Error: {e}", exc_info=True)
+
+
+    except Exception as e:
+        flash(f"CRITICAL ERROR: Failed to get Google Drive service: {e}", 'danger')
+        app.logger.error(f"Test Drive Access Critical Error: {e}", exc_info=True)
+
+    return redirect(url_for('dashboard')) # Or a dedicated test results page
 
 @app.route('/google/authorize')
 @login_required # Only an admin should trigger this initial authorization
@@ -4511,7 +5358,7 @@ def google_callback():
         flow.fetch_token(authorization_response=request.url)
 
         creds = flow.credentials
-        
+
         # Save the credentials (including refresh token) for future use
         with open(app.config['GOOGLE_DRIVE_TOKEN_FILE'], 'w') as token:
             token.write(creds.to_json())
@@ -4543,5 +5390,5 @@ def auth_google_drive_cli():
 if __name__ == '__main__':
     with app.app_context():
         db.create_all()
-   
+
     app.run(debug=False)

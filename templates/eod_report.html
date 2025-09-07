@@ -1,0 +1,322 @@
+{% extends "base.html" %}
+
+{% block title %}End of Day Report{% endblock %}
+
+{% block content %}
+<div class="container mt-4">
+    <div class="card shadow-sm">
+        <div class="card-body p-4 p-md-5">
+            <h2 class="card-title mb-2">End of Day Report for {{ today_date.strftime('%Y-%m-%d') }}</h2>
+            <p class="text-muted mb-4">Complete this report at the end of your shift. All fields are required unless marked optional.</p>
+
+            <form action="{{ url_for('eod_report') }}" method="POST" enctype="multipart/form-data" id="eod-report-form"> {# Added ID to form #}
+                
+                {# Manager Name - Pulled from logged-in manager #}
+                <div class="mb-3">
+                    <label for="manager_name" class="form-label">Manager Name</label>
+                    <input type="text" id="manager_name" name="manager_name" class="form-control" value="{{ current_user.full_name }}" readonly required>
+                </div>
+
+                <hr class="my-4">
+                <h4 class="mb-3">Operational Checks</h4>
+
+                <div class="mb-3">
+                    <label class="form-label">Gas Ordered?</label>
+                    <div>
+                        <div class="form-check form-check-inline">
+                            <input class="form-check-input" type="radio" name="gas_ordered" id="gas_ordered_yes" value="True" required>
+                            <label class="form-check-label" for="gas_ordered_yes">Yes</label>
+                        </div>
+                        <div class="form-check form-check-inline">
+                            <input class="form-check-input" type="radio" name="gas_ordered" id="gas_ordered_no" value="False">
+                            <label class="form-check-label" for="gas_ordered_no">No</label>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="mb-3">
+                    <label class="form-label">Garnish Ordered?</label>
+                    <div>
+                        <div class="form-check form-check-inline">
+                            <input class="form-check-input" type="radio" name="garnish_ordered" id="garnish_ordered_yes" value="True" required>
+                            <label class="form-check-label" for="garnish_ordered_yes">Yes</label>
+                        </div>
+                        <div class="form-check form-check-inline">
+                            <input class="form-check-input" type="radio" name="garnish_ordered" id="garnish_ordered_no" value="False">
+                            <label class="form-check-label" for="garnish_ordered_no">No</label>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="mb-3">
+                    <label for="maintenance_issues" class="form-label">Note any maintenance Issues?</label>
+                    <div class="form-text text-muted mb-1">Note any physical maintenance issues like broken windows or leaky pipes.</div>
+                    <textarea id="maintenance_issues" name="maintenance_issues" class="form-control" rows="3"></textarea>
+                </div>
+
+                <div class="mb-3">
+                    <label for="staff_pitched_absences" class="form-label">All staff pitched? Note any absences.</label>
+                    <textarea id="staff_pitched_absences" name="staff_pitched_absences" class="form-control" rows="3"></textarea>
+                </div>
+
+                <div class="mb-3">
+                    <label for="staff_deductions" class="form-label">Note Any Staff Deductions</label>
+                    <textarea id="staff_deductions" name="staff_deductions" class="form-control" rows="3"></textarea>
+                </div>
+
+                <div class="mb-3">
+                    <label for="stock_borrowed_lent" class="form-label">Any Stock Borrowed or Lent?</label>
+                    <div class="form-text text-muted mb-1">Potentially draw from new subsection under Inventory & Recipes, where staff can log stock borrowed or lent, which is then posted as an announcement.</div>
+                    <textarea id="stock_borrowed_lent" name="stock_borrowed_lent" class="form-control" rows="3"></textarea>
+                </div>
+
+                <div class="mb-3">
+                    <label for="customer_complaints" class="form-label">Note down any customer complaints.</label>
+                    <textarea id="customer_complaints" name="customer_complaints" class="form-control" rows="3"></textarea>
+                </div>
+
+                <div class="mb-3">
+                    <label for="customer_complaint_contact_no" class="form-label">Contact no for any customer complaints.</label>
+                    <div class="form-text text-muted mb-1">Where possible, collect the customers' details and invite them back.</div>
+                    <input type="text" id="customer_complaint_contact_no" name="customer_complaint_contact_no" class="form-control">
+                </div>
+
+                <hr class="my-4">
+                <h4 class="mb-3">Closing Checks</h4>
+
+                <div class="mb-3">
+                    <label class="form-label">Shop phone put on charge?</label>
+                    <div>
+                        <div class="form-check form-check-inline">
+                            <input class="form-check-input" type="radio" name="shop_phone_on_charge" id="shop_phone_on_charge_yes" value="True" required>
+                            <label class="form-check-label" for="shop_phone_on_charge_yes">Yes</label>
+                        </div>
+                        <div class="form-check form-check-inline">
+                            <input class="form-check-input" type="radio" name="shop_phone_on_charge" id="shop_phone_on_charge_no" value="False">
+                            <label class="form-check-label" for="shop_phone_on_charge_no">No</label>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="mb-3">
+                    <label class="form-label">TV Boxes locked?</label>
+                    <div>
+                        <div class="form-check form-check-inline">
+                            <input class="form-check-input" type="radio" name="tv_boxes_locked" id="tv_boxes_locked_yes" value="True" required>
+                            <label class="form-check-label" for="tv_boxes_locked_yes">Yes</label>
+                        </div>
+                        <div class="form-check form-check-inline">
+                            <input class="form-check-input" type="radio" name="tv_boxes_locked" id="tv_boxes_locked_no" value="False">
+                            <label class="form-check-label" for="tv_boxes_locked_no">No</label>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="mb-3">
+                    <label class="form-label">All Equipment Switched off? (Lights, TVs, Sound)</label>
+                    <div>
+                        <div class="form-check form-check-inline">
+                            <input class="form-check-input" type="radio" name="all_equipment_switched_off" id="equipment_off_yes" value="True" required>
+                            <label class="form-check-label" for="equipment_off_yes">Yes</label>
+                        </div>
+                        <div class="form-check form-check-inline">
+                            <input class="form-check-input" type="radio" name="all_equipment_switched_off" id="equipment_off_no" value="False">
+                            <label class="form-check-label" for="equipment_off_no">No</label>
+                        </div>
+                    </div>
+                </div>
+
+                <hr class="my-4">
+                <h4 class="mb-3">Financials</h4>
+
+                <div class="mb-3">
+                    <label class="form-label">Credit card machines banked (day end done)?</label>
+                    <div>
+                        <div class="form-check form-check-inline">
+                            <input class="form-check-input" type="radio" name="credit_card_machines_banked" id="card_banked_yes" value="True" required>
+                            <label class="form-check-label" for="card_banked_yes">Yes</label>
+                        </div>
+                        <div class="form-check form-check-inline">
+                            <input class="form-check-input" type="radio" name="credit_card_machines_banked" id="card_banked_no" value="False">
+                            <label class="form-check-label" for="card_banked_no">No</label>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="mb-3">
+                    <label class="form-label">Card Machines put on charge?</label>
+                    <div>
+                        <div class="form-check form-check-inline">
+                            <input class="form-check-input" type="radio" name="card_machines_on_charge" id="card_charge_yes" value="True" required>
+                            <label class="form-check-label" for="card_charge_yes">Yes</label>
+                        </div>
+                        <div class="form-check form-check-inline">
+                            <input class="form-check-input" type="radio" name="card_machines_on_charge" id="card_charge_no" value="False">
+                            <label class="form-check-label" for="card_charge_no">No</label>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="mb-3">
+                    <label for="declare_card_sales_pos360" class="form-label">Declare card sales as per POS360</label>
+                    <input type="text" id="declare_card_sales_pos360" name="declare_card_sales_pos360" class="form-control" required>
+                </div>
+
+                <div class="mb-3">
+                    <label for="actual_card_figure_banked" class="form-label">Actual Card Figure Banked</label>
+                    <input type="text" id="actual_card_figure_banked" name="actual_card_figure_banked" class="form-control" required>
+                </div>
+
+                <div class="mb-3">
+                    <label for="card_batches_pictures" class="form-label">Upload Pictures of the Card Batches (max 10 images)</label>
+                    <input class="form-control" type="file" id="card_batches_pictures" name="eod_images" accept="image/*" multiple>
+                    <div class="form-text">These will be saved to a Google Drive subfolder with today's date.</div>
+                </div>
+
+                <div class="mb-3">
+                    <label for="declare_cash_sales_pos360" class="form-label">Declare amount of Cash as per 360</label>
+                    <input type="text" id="declare_cash_sales_pos360" name="declare_cash_sales_pos360" class="form-control" required>
+                </div>
+
+                <div class="mb-3">
+                    <label for="actual_cash_on_hand" class="form-label">Actual Cash On Hand</label>
+                    <input type="text" id="actual_cash_on_hand" name="actual_cash_on_hand" class="form-control" required>
+                </div>
+
+                <div class="mb-3">
+                    <label for="accounts_amount" class="form-label">Accounts Amount (per account)</label>
+                    <textarea id="accounts_amount" name="accounts_amount" class="form-control" rows="3"></textarea>
+                </div>
+
+                <div class="mb-3">
+                    <label for="stock_wastage_value" class="form-label">Note down any stock wastage and the value thereof</label>
+                    <textarea id="stock_wastage_value" name="stock_wastage_value" class="form-control" rows="3"></textarea>
+                </div>
+
+                <hr class="my-4">
+                <h4 class="mb-3">Daily Performance & Security</h4>
+
+                <div class="mb-3">
+                    <label class="form-label">POS 360 day end complete?</label>
+                    <div>
+                        <div class="form-check form-check-inline">
+                            <input class="form-check-input" type="radio" name="pos360_day_end_complete" id="pos360_complete_yes" value="True" required>
+                            <label class="form-check-label" for="pos360_complete_yes">Yes</label>
+                        </div>
+                        <div class="form-check form-check-inline">
+                            <input class="form-check-input" type="radio" name="pos360_day_end_complete" id="pos360_complete_no" value="False">
+                            <label class="form-check-label" for="pos360_complete_no">No</label>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="mb-3">
+                    <label for="todays_target" class="form-label">What was today's target?</label>
+                    <input type="text" id="todays_target" name="todays_target" class="form-control">
+                </div>
+
+                <div class="mb-3">
+                    <label for="turnover_ex_tips" class="form-label">Note down turnover for the day (ex TIPS)</label>
+                    <input type="text" id="turnover_ex_tips" name="turnover_ex_tips" class="form-control">
+                </div>
+
+                <div class="mb-3">
+                    <label class="form-label">Security walk through (clean shop)?</label>
+                    <div>
+                        <div class="form-check form-check-inline">
+                            <input class="form-check-input" type="radio" name="security_walk_through_clean_shop" id="security_walk_through_yes" value="True" required>
+                            <label class="form-check-label" for="security_walk_through_yes">Yes</label>
+                        </div>
+                        <div class="form-check form-check-inline">
+                            <input class="form-check-input" type="radio" name="security_walk_through_clean_shop" id="security_walk_through_no" value="False">
+                            <label class="form-check-label" for="security_walk_through_no">No</label>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="mb-3">
+                    <label for="other_issues_experienced" class="form-label">Note any other issues experienced during shift</label>
+                    <textarea id="other_issues_experienced" name="other_issues_experienced" class="form-control" rows="3"></textarea>
+                </div>
+
+                <hr class="my-4">
+                <h4 class="mb-3">Email Options</h4>
+
+                <div class="mb-3">
+                    <div class="form-check">
+                        <input class="form-check-input" type="checkbox" id="email_copy_checkbox" name="email_copy_checkbox" value="1">
+                        <label class="form-check-label" for="email_copy_checkbox">Email me a copy of my response</label>
+                    </div>
+                </div>
+
+                <div class="mb-3" id="email_address_field" style="display: none;">
+                    <label for="email_copy_address" class="form-label">Your Email Address</label>
+                    {# MODIFIED: Value is now set by JS, placeholder provides guidance #}
+                    <input type="email" id="email_copy_address" name="email_copy_address" class="form-control" placeholder="Enter email address">
+                    <div class="form-text">This address will receive a copy of this report. If left blank, your profile email will be used.</div>
+                </div>
+
+                <div class="d-grid mt-4">
+                    <button type="submit" class="btn btn-primary btn-lg" id="eod-submit-btn">Submit End of Day Report</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+{% block scripts %}
+<script>
+    document.addEventListener('DOMContentLoaded', function() {
+        // --- Shared function for loading state ---
+        function showLoading(buttonElement, originalText) {
+            buttonElement.disabled = true;
+            buttonElement.innerHTML = '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span> Submitting...';
+            // Store original text if needed for resetting, though a redirect usually means it's not needed.
+            if (!buttonElement.dataset.originalText) {
+                buttonElement.dataset.originalText = originalText;
+            }
+        }
+        // --- END Shared function ---
+
+        const emailCopyCheckbox = document.getElementById('email_copy_checkbox');
+        const emailAddressField = document.getElementById('email_address_field');
+        const emailCopyAddressInput = document.getElementById('email_copy_address');
+        const currentUserEmail = "{{ current_user.email | default('', true) }}";
+
+        function toggleEmailAddressField() {
+            if (emailCopyCheckbox.checked) {
+                emailAddressField.style.display = 'block';
+
+                if (currentUserEmail) {
+                    emailCopyAddressInput.value = currentUserEmail;
+                    emailCopyAddressInput.setAttribute('readonly', 'readonly');
+                    emailCopyAddressInput.removeAttribute('required');
+                } else {
+                    emailCopyAddressInput.value = '';
+                    emailCopyAddressInput.removeAttribute('readonly');
+                    emailCopyAddressInput.setAttribute('required', 'required');
+                }
+            } else {
+                emailAddressField.style.display = 'none';
+                emailCopyAddressInput.removeAttribute('required');
+                emailCopyAddressInput.removeAttribute('readonly');
+            }
+        }
+
+        emailCopyCheckbox.addEventListener('change', toggleEmailAddressField);
+        toggleEmailAddressField(); // Initial call
+
+        // --- EOD Report Form Submission Loading State ---
+        const eodReportForm = document.getElementById('eod-report-form');
+        const eodSubmitBtn = document.getElementById('eod-submit-btn');
+
+        if (eodReportForm && eodSubmitBtn) {
+            eodReportForm.addEventListener('submit', function() {
+                showLoading(eodSubmitBtn, eodSubmitBtn.textContent);
+            });
+        }
+        // --- END EOD Report Form Submission Loading State ---
+    });
+</script>
+{% endblock scripts %}
+{% endblock %}

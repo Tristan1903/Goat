@@ -19,15 +19,16 @@
                         {# --- NEW INGREDIENT MANAGEMENT SECTION --- #}
                         <h5 class="mt-4 mb-3">Ingredients</h5>
                         <div id="ingredients-container">
-                            {# Initial blank ingredient row #}
-                            <div class="input-group mb-2 ingredient-row">
-                                <select class="form-select ingredient-select" name="ingredient_id[]" required>
-                                    <option value="" disabled selected>Select an ingredient product...</option>
-                                    {% for product in products %}
-                                        <option value="{{ product.id }}">{{ product.name }} ({{ product.unit_of_measure }})</option>
-                                    {% endfor %}
-                                </select>
-                                <input type="number" step="0.01" min="0" class="form-control quantity-input" name="quantity[]" placeholder="Quantity" required>
+                            {# Initial blank ingredient row - REMOVED <select> #}
+                            <div class="d-flex mb-2 ingredient-row align-items-center">
+                                <div class="ingredient-dropdown-wrapper flex-grow-1 me-2 position-relative">
+                                    <input type="text" class="form-control ingredient-search-input" placeholder="Ingredient" aria-label="Search ingredient" required>
+                                    <input type="hidden" name="ingredient_id[]" class="selected-ingredient-id">
+                                    <div class="ingredient-options-list list-group position-absolute w-100 shadow-sm" style="z-index: 1000; max-height: 200px; overflow-y: auto; display: none;">
+                                        {# Options will be dynamically added here #}
+                                    </div>
+                                </div>
+                                <input type="number" step="0.01" min="0" class="form-control quantity-input me-2" name="quantity[]" placeholder="Quantity" required>
                                 <button type="button" class="btn btn-outline-danger remove-ingredient"><i class="fas fa-trash"></i></button>
                             </div>
                         </div>
@@ -54,77 +55,174 @@
 document.addEventListener('DOMContentLoaded', function() {
     const ingredientsContainer = document.getElementById('ingredients-container');
     const addIngredientBtn = document.getElementById('add-ingredient-btn');
-    const productOptionsHtml = `
-        {% for product in products %}
-            <option value="{{ product.id }}">{{ product.name }} ({{ product.unit_of_measure }})</option>
-        {% endfor %}
-    `;
 
-    function addIngredientRow(selectedProductId = '', quantity = '') {
+    // Store all products as a JS array from Jinja for client-side filtering
+    const allProducts = [
+        {% for product in products %}
+            { id: "{{ product.id }}", name: "{{ product.name }}", unit: "{{ product.unit_of_measure }}" },
+        {% endfor %}
+    ];
+
+    // Helper to get selected product IDs across all rows (for disabling already-used options)
+    function getSelectedProductIds() {
+        return Array.from(ingredientsContainer.querySelectorAll('.selected-ingredient-id'))
+            .map(input => input.value)
+            .filter(value => value && value !== '');
+    }
+
+    // Function to render options list for a given input
+    function renderOptionsList(inputElement, filterTerm = '') {
+        const wrapper = inputElement.closest('.ingredient-dropdown-wrapper');
+        const optionsList = wrapper.querySelector('.ingredient-options-list');
+        const selectedIdInput = wrapper.querySelector('.selected-ingredient-id');
+        const currentlySelectedId = selectedIdInput.value;
+
+        optionsList.innerHTML = ''; // Clear previous options
+        optionsList.style.display = 'none'; // CRITICAL FIX 1: Hide by default
+
+        const selectedProductIds = getSelectedProductIds(); // Get all selected IDs from other rows
+
+        const filtered = allProducts.filter(product => {
+            const lowerCaseName = product.name.toLowerCase();
+            const lowerCaseUnit = product.unit.toLowerCase();
+            const lowerCaseFilter = filterTerm.toLowerCase();
+
+            const isMatch = lowerCaseName.includes(lowerCaseFilter) || lowerCaseUnit.includes(lowerCaseFilter);
+            const isAlreadySelected = selectedProductIds.includes(product.id) && product.id !== currentlySelectedId; // Exclude self if already selected
+
+            return isMatch && !isAlreadySelected;
+        }).sort((a, b) => a.name.localeCompare(b.name)); // Sort alphabetically
+
+        if (filtered.length === 0 && filterTerm) {
+             const noResults = document.createElement('div');
+             noResults.className = 'list-group-item disabled text-muted';
+             noResults.textContent = 'No matching products';
+             optionsList.appendChild(noResults);
+             optionsList.style.display = 'block';
+             return;
+        } else if (filtered.length === 0 && !filterTerm && !currentlySelectedId) {
+            // No results and no search term means nothing to show, hide list
+            return;
+        }
+
+        filtered.forEach(product => {
+            const item = document.createElement('button');
+            item.type = 'button'; // Important for semantic button behavior without form submission
+            item.className = 'list-group-item list-group-item-action';
+            item.dataset.productId = product.id;
+            item.textContent = `${product.name} (${product.unit})`;
+            
+            item.addEventListener('click', () => {
+                inputElement.value = product.name;
+                selectedIdInput.value = product.id;
+                optionsList.style.display = 'none'; // CRITICAL FIX 2: Close dropdown on selection
+                // Trigger change to update other dropdowns' disabled states
+                inputElement.dispatchEvent(new Event('change', { bubbles: true }));
+            });
+            optionsList.appendChild(item);
+        });
+
+        // Only show list if there are actual items or 'no matching products'
+        if (filtered.length > 0 || filterTerm) {
+            optionsList.style.display = 'block';
+        }
+    }
+
+    // Function to set up event listeners for a new ingredient row
+    function setupIngredientRowListeners(row) {
+        const searchInput = row.querySelector('.ingredient-search-input');
+        const selectedIdInput = row.querySelector('.selected-ingredient-id');
+        const optionsList = row.querySelector('.ingredient-options-list');
+
+        let blurTimeout;
+
+        searchInput.addEventListener('focus', () => {
+            clearTimeout(blurTimeout);
+            // Only render options if input is not empty or if it's currently selected
+            if (searchInput.value || selectedIdInput.value) {
+                renderOptionsList(searchInput, searchInput.value);
+            }
+        });
+
+        searchInput.addEventListener('input', () => {
+            selectedIdInput.value = ''; // Clear selected ID if user starts typing
+            renderOptionsList(searchInput, searchInput.value);
+        });
+
+        // Handle blur with a small delay to allow click event on options to fire
+        searchInput.addEventListener('blur', () => {
+            blurTimeout = setTimeout(() => {
+                optionsList.style.display = 'none';
+                // If input value is empty and no selection, ensure hidden ID is cleared
+                if (!searchInput.value && !selectedIdInput.value) {
+                    selectedIdInput.value = '';
+                } else if (searchInput.value && !selectedIdInput.value) {
+                    // If user typed something but didn't select, clear the input as well
+                    // to ensure only selected items are submitted
+                    searchInput.value = '';
+                }
+            }, 100); 
+        });
+
+        // Ensure clicks within the options list don't immediately hide it due to blur
+        optionsList.addEventListener('mousedown', (e) => {
+            e.preventDefault(); // Prevent blur from firing on input when clicking option
+        });
+
+        // Custom change event handler for searchInput (simulated for refreshAllIngredientRowsOptions)
+        // This is called when an item is selected from the list.
+        searchInput.addEventListener('change', (e) => {
+            refreshAllIngredientRowsOptions();
+        });
+        
+        // When quantity changes, also refresh to catch any indirect impacts
+        row.querySelector('.quantity-input').addEventListener('input', () => {
+             refreshAllIngredientRowsOptions();
+        });
+    }
+
+    // Refreshes all ingredient rows' option lists based on current selections
+    function refreshAllIngredientRowsOptions() {
+        ingredientsContainer.querySelectorAll('.ingredient-row').forEach(row => {
+            const searchInput = row.querySelector('.ingredient-search-input');
+            // Only re-render if the list is currently visible or the input is focused
+            if (searchInput === document.activeElement || row.querySelector('.ingredient-options-list').style.display === 'block') {
+                renderOptionsList(searchInput, searchInput.value);
+            }
+        });
+    }
+
+    function addIngredientRow(initialProductId = '', initialQuantity = '', initialProductName = '') {
         const newRow = document.createElement('div');
-        newRow.className = 'input-group mb-2 ingredient-row';
+        newRow.className = 'd-flex mb-2 ingredient-row align-items-center';
         newRow.innerHTML = `
-            <select class="form-select ingredient-select" name="ingredient_id[]" required>
-                <option value="" disabled selected>Select an ingredient product...</option>
-                ${productOptionsHtml}
-            </select>
-            <input type="number" step="0.01" min="0" class="form-control quantity-input" name="quantity[]" placeholder="Quantity" required value="${quantity}">
+            <div class="ingredient-dropdown-wrapper flex-grow-1 me-2 position-relative">
+                <input type="text" class="form-control ingredient-search-input" placeholder="Type to search ingredient..." aria-label="Search ingredient" required>
+                <input type="hidden" name="ingredient_id[]" class="selected-ingredient-id">
+                <div class="ingredient-options-list list-group position-absolute w-100 shadow-sm" style="z-index: 1000; max-height: 200px; overflow-y: auto; display: none;">
+                </div>
+            </div>
+            <input type="number" step="0.01" min="0" class="form-control quantity-input me-2" name="quantity[]" placeholder="Quantity" required value="${initialQuantity}">
             <button type="button" class="btn btn-outline-danger remove-ingredient"><i class="fas fa-trash"></i></button>
         `;
         ingredientsContainer.appendChild(newRow);
 
-        const selectElement = newRow.querySelector('.ingredient-select');
-        if (selectedProductId) {
-            selectElement.value = String(selectedProductId);
+        const searchInput = newRow.querySelector('.ingredient-search-input');
+        const selectedIdInput = newRow.querySelector('.selected-ingredient-id');
+
+        if (initialProductId && initialProductName) {
+            searchInput.value = initialProductName;
+            selectedIdInput.value = initialProductId;
+        } else if (initialProductId) {
+            const product = allProducts.find(p => p.id === initialProductId);
+            if (product) {
+                searchInput.value = product.name;
+                selectedIdInput.value = product.id;
+            }
         }
 
-        // Attach change handler to update options when user picks a product in this new select
-        selectElement.addEventListener('change', refreshOptions);
-        
-        // After adding, refresh all dropdowns to disable the newly selected item in others
-        refreshOptions();
-    }
-
-    // Function to get all currently selected product IDs across all dropdowns
-    function getSelectedProductIds() {
-        return Array.from(ingredientsContainer.querySelectorAll('.ingredient-select'))
-            .map(select => select.value)
-            .filter(value => value && value !== ''); // Filter out empty or placeholder values
-    }
-
-    // Function to refresh options in all dropdowns
-    function refreshOptions() {
-        const selectedIds = getSelectedProductIds(); // Get current selections
-        
-        ingredientsContainer.querySelectorAll('.ingredient-select').forEach(select => {
-            const currentValue = select.value; // Store the current value of this specific dropdown
-
-            // Rebuild options from the original full list to have a clean slate
-            select.innerHTML = `<option value="" disabled selected>Select an ingredient product...</option>` + productOptionsHtml;
-
-            // Try to re-set the current value if it was a valid selection
-            if (currentValue && selectedIds.includes(currentValue)) { // Check if the current value is still among selected (i.e., this is its owner)
-                select.value = currentValue;
-            } else {
-                // If the current value is no longer valid (e.g., deleted or taken by another select),
-                // reset to placeholder. This helps if an option was removed by another select.
-                select.value = ''; 
-                select.querySelector('option[value=""]').selected = true;
-            }
-
-
-            // Now, disable/remove options that are selected in other dropdowns
-            selectedIds.forEach(selectedId => {
-                // Only touch options that are not the current dropdown's own selection
-                if (selectedId !== currentValue) {
-                    const optionToDisable = select.querySelector(`option[value="${selectedId}"]`);
-                    if (optionToDisable) {
-                        optionToDisable.remove(); // Disable the option
-                        // Or remove: optionToDisable.remove(); (Disabling is usually better UX)
-                    }
-                }
-            });
-        });
+        setupIngredientRowListeners(newRow);
+        refreshAllIngredientRowsOptions();
     }
 
     // --- LOGIC FOR INITIAL SETUP AND RESTORING FORM DATA ---
@@ -132,28 +230,24 @@ document.addEventListener('DOMContentLoaded', function() {
     const oldQuantities = {{ request.form.getlist('quantity[]') | tojson | safe }};
 
     if (oldIngredients.length > 0) {
-        // If there's old form data (e.g., after a validation error), restore it
-        ingredientsContainer.innerHTML = ''; // Clear any existing placeholders
+        ingredientsContainer.innerHTML = '';
         oldIngredients.forEach((id, index) => {
-            addIngredientRow(id, oldQuantities[index] || '');
+            const product = allProducts.find(p => p.id === id);
+            addIngredientRow(id, oldQuantities[index] || '', product ? product.name : '');
         });
     } else {
-        // If no old form data, ensure there's at least one empty row initially.
         if (ingredientsContainer.children.length === 0) {
-            addIngredientRow(); 
+            addIngredientRow();
         }
     }
-    // Initial refresh after all initial rows are set up
-    refreshOptions(); 
+    // No initial refreshAllIngredientRowsOptions call here to prevent all dropdowns opening
+    // They will open on focus/input
     // --- END LOGIC ---
 
-    // Event listener for the "Add Another Ingredient" button
-    if (addIngredientBtn && !addIngredientBtn.dataset.bound) {
+    if (addIngredientBtn) {
         addIngredientBtn.addEventListener('click', () => addIngredientRow());
-        addIngredientBtn.dataset.bound = 'true';
     }
 
-    // Event delegation for remove buttons
     ingredientsContainer.addEventListener('click', function(event) {
         if (event.target.closest('.remove-ingredient')) {
             const rowToRemove = event.target.closest('.ingredient-row');
@@ -162,25 +256,22 @@ document.addEventListener('DOMContentLoaded', function() {
             if (ingredientsContainer.children.length > 1) { 
                 rowToRemove.remove();
             } else {
-                const lastRowSelect = rowToRemove.querySelector('.ingredient-select');
-                const lastRowQuantity = rowToRemove.querySelector('.quantity-input');
-                if (lastRowSelect) {
-                    lastRowSelect.value = ''; 
-                    lastRowSelect.querySelector('option[value=""]').selected = true;
-                }
-                if (lastRowQuantity) {
-                    lastRowQuantity.value = '';
-                }
+                const searchInput = rowToRemove.querySelector('.ingredient-search-input');
+                const selectedIdInput = rowToRemove.querySelector('.selected-ingredient-id');
+                const quantityInput = rowToRemove.querySelector('.quantity-input');
+                const optionsList = rowToRemove.querySelector('.ingredient-options-list');
+
+                searchInput.value = '';
+                selectedIdInput.value = '';
+                quantityInput.value = '';
+                optionsList.style.display = 'none';
             }
-            // After removal/clearing, refresh options to ensure options become available again
-            refreshOptions();
+            refreshAllIngredientRowsOptions();
         }
     });
 
-    // Also update options when an ingredient-select changes (for initial rows or restored rows)
-    ingredientsContainer.querySelectorAll('.ingredient-select').forEach(select => {
-        select.addEventListener('change', refreshOptions);
-    });
+    // Initial setup for existing rows on page load (if any)
+    ingredientsContainer.querySelectorAll('.ingredient-row').forEach(setupIngredientRowListeners);
 });
 </script>
 {% endblock scripts %}

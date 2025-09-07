@@ -9,7 +9,34 @@
             <h2 class="card-title mb-2">Active Users</h2>
             <p class="text-muted mb-4">Users who have been active in the last 5 minutes are shown below.</p>
 
-            <div class="table-responsive">
+            <div class="table-responsive" id="activeUsersTableContainer">
+                {# This div will be updated by JavaScript #}
+                <p class="text-center text-muted">Loading active users...</p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    function fetchAndRenderActiveUsers() {
+        fetch('{{ url_for("api_active_users") }}')
+            .then(response => {
+                if (!response.ok) {
+                    // Handle HTTP errors, e.g., 403 Forbidden if user's role changes mid-session
+                    // or if they become suspended.
+                    if (response.status === 403) {
+                        console.error('Access Denied to active users API. Stopping polling.');
+                        clearInterval(activeUsersInterval); // Stop polling
+                        document.getElementById('activeUsersTableContainer').innerHTML =
+                            '<p class="text-center text-danger">Access Denied to active user data.</p>';
+                        return Promise.reject('Access Denied'); // Propagate error
+                    }
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                return response.json();
+            })
+            .then(users => {
+                let tableHtml = `
                 <table class="table table-hover">
                     <thead class="table-dark">
                         <tr>
@@ -21,40 +48,70 @@
                         </tr>
                     </thead>
                     <tbody>
-                        {% for user in users %}
-                        <tr>
-                            <td class="fw-bold">{{ user.full_name }}</td>
-                            <td>{{ user.username }}</td>
-                            <!-- --- THIS IS THE CORRECTED SECTION --- -->
-                            <td>
-                                {% for role in user.roles %}
-                                    <span class="badge bg-secondary">{{ role.name.replace('_', ' ').title() }}</span>
-                                {% endfor %}
-                            </td>
-                            <td>{{ user.last_seen.strftime('%Y-%m-%d %H:%M:%S') }} UTC</td>
-                            <td>
-                                {% if user.id != current_user.id and not user.force_logout_requested %}
-                                    <form action="{{ url_for('force_logout', user_id=user.id) }}" method="post" class="d-inline">
-                                        <button type="submit" class="btn btn-sm btn-outline-warning" onclick="return confirm('Are you sure you want to log this user out? They will be signed out on their next click.')">
-                                            <i class="fas fa-sign-out-alt me-1"></i> Force Logout
-                                        </button>
-                                    </form>
-                                {% elif user.force_logout_requested %}
-                                    <span class="badge bg-secondary">Logout Pending...</span>
-                                {% else %}
-                                    <span class="text-muted small">Your Account</span>
-                                {% endif %}
-                            </td>
-                        </tr>
-                        {% else %}
+                `;
+                if (users.length === 0) {
+                    tableHtml += `
                         <tr>
                             <td colspan="5" class="text-center text-muted">No users have been active recently.</td>
                         </tr>
-                        {% endfor %}
-                    </tbody>
-                </table>
-            </div>
-        </div>
-    </div>
-</div>
+                    `;
+                } else {
+                    users.forEach(user => {
+                        let rolesBadges = user.roles.map(role => `<span class="badge bg-secondary me-1">${role}</span>`).join('');
+                        let actionsHtml = '';
+
+                        // IMPORTANT: For security, the logic to display "Force Logout"
+                        // should also be present in the server-side code that generates
+                        // the initial HTML, and validated on the server when the form is submitted.
+                        // This client-side logic only controls *what is displayed*, not *what is allowed*.
+                        if (user.id !== {{ current_user.id }} && !user.force_logout_requested) {
+                            actionsHtml = `
+                                <form action="{{ url_for('force_logout', user_id=0).replace('0', '__USER_ID__') }}" method="post" class="d-inline">
+                                    <button type="submit" class="btn btn-sm btn-outline-warning" onclick="return confirm('Are you sure you want to log this user out? They will be signed out on their next click.')">
+                                        <i class="fas fa-sign-out-alt me-1"></i> Force Logout
+                                    </button>
+                                </form>
+                            `.replace('__USER_ID__', user.id); // Dynamically set user_id in the form action
+                        } else if (user.force_logout_requested) {
+                            actionsHtml = `<span class="badge bg-secondary">Logout Pending...</span>`;
+                        } else {
+                            actionsHtml = `<span class="text-muted small">Your Account</span>`;
+                        }
+
+                        tableHtml += `
+                            <tr>
+                                <td class="fw-bold">${user.full_name}</td>
+                                <td>${user.username}</td>
+                                <td>${rolesBadges}</td>
+                                <td>${user.last_seen}</td>
+                                <td>${actionsHtml}</td>
+                            </tr>
+                        `;
+                    });
+                }
+                tableHtml += `</tbody></table>`;
+                document.getElementById('activeUsersTableContainer').innerHTML = tableHtml;
+            })
+            .catch(error => {
+                console.error('Failed to fetch active users:', error);
+                // Optionally display an error message in the UI
+                if (error.message !== 'Access Denied') { // Don't overwrite explicit access denied message
+                    document.getElementById('activeUsersTableContainer').innerHTML =
+                        '<p class="text-center text-danger">Failed to load active users. Please refresh the page.</p>';
+                }
+            });
+    }
+
+    // Call the function immediately when the page loads
+    fetchAndRenderActiveUsers();
+
+    // Set an interval to call the function every 10 seconds (10000 milliseconds)
+    const activeUsersInterval = setInterval(fetchAndRenderActiveUsers, 10000);
+
+    // Optional: Clear interval when navigating away from the page to prevent memory leaks,
+    // though modern browsers often handle this automatically for simple setIntervals.
+    // window.addEventListener('beforeunload', () => {
+    //     clearInterval(activeUsersInterval);
+    // });
+</script>
 {% endblock %}

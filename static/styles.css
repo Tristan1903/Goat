@@ -1,144 +1,323 @@
 /* === General Body & Font Styling === */
-/* NEW: General box-sizing for more predictable layout calculations */
 html {
     box-sizing: border-box;
+    overflow-x: hidden; /* Ensure overall page does not scroll horizontally */
 }
 *, *::before, *::after {
     box-sizing: inherit;
 }
 body {
-    background-color: rgb(0 71 49); /* <-- YOUR NEW BACKGROUND COLOR */
+    background-color: rgb(0 71 49); /* Green */
     font-family: 'Inter', sans-serif;
-    color: #343a40;
-    /* Removed overflow-x: hidden from body here as per request.
-       Layout adjustments in media query should prevent it. */
+    color: #343a40; /* Dark grey for general text on light backgrounds */
+    overflow-x: hidden; /* Ensure body does not scroll horizontally */
 }
 
 /* === Custom Navbar Styling === */
 .custom-navbar {
-    background-color: rgb(48, 12, 16) !important;
-    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-    position: sticky; /* Default for desktop */
+    background-color: rgb(48, 12, 16) !important; /* Red */
+    box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+    position: sticky;
     top: 0;
     z-index: 1030;
+    padding-left: 1rem;
+    padding-right: 1rem;
 }
 
+.custom-navbar .navbar-brand img {
+    max-height: 45px;
+    width: auto;
+}
 
 .custom-navbar .nav-link {
     color: white !important;
     font-weight: 500;
-    transition: background-color 0.2s ease-in-out;
+    transition: background-color 0.2s ease-in-out, color 0.2s ease-in-out;
+    padding: 0.75rem 1rem;
+    border-radius: 0.25rem;
 }
 
 .custom-navbar .nav-link:hover {
     color: #f0f0f0 !important;
-    background-color: rgba(255, 255, 255, 0.1);
-    border-radius: 0.25rem;
+    background-color: rgba(255, 255, 255, 0.15);
 }
 
 .custom-navbar .nav-link.active {
     font-weight: bold;
+    background-color: rgba(255, 255, 255, 0.1);
 }
 
 /* General dropdown menus in navbar (e.g., Schedules, Inventory, Management) */
 .custom-navbar .dropdown-menu {
-    background-color: rgba(48, 12, 16, 0.98); /* Keep other dropdowns dark */
-    border: 1px solid rgba(255, 255, 255, 0.1);
+    background-color: rgba(48, 12, 16, 0.95);
+    border: 1px solid rgba(255, 255, 255, 0.2);
     border-radius: 0.5rem;
-    /* No max-height/overflow-y on desktop dropdowns. */
+    max-height: 70vh;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    box-shadow: 0 8px 16px rgba(0,0,0,0.3);
 }
 
 .custom-navbar .dropdown-item {
     color: white;
-    transition: background-color 0.2s ease-in-out;
+    transition: background-color 0.2s ease-in-out, color 0.2s ease-in-out;
+    padding: 0.75rem 1rem;
 }
 
 .custom-navbar .dropdown-item:hover {
-    background-color: rgba(255, 255, 255, 0.1);
+    background-color: rgba(255, 255, 255, 0.2);
     color: white;
 }
 
+.custom-navbar .dropdown-header {
+    color: rgba(255, 255, 255, 0.7);
+    padding: 0.75rem 1rem;
+}
+
+.custom-navbar .dropdown-divider {
+    border-top-color: rgba(255, 255, 255, 0.3);
+}
+
+
 /* Specific styling for the Notification Dropdown menu */
 .navbar-nav.ms-auto .dropdown-menu-end {
-    background-color: white !important; /* Set background to white */
-    border: 1px solid #dee2e6; /* Adjust border for light background */
-    box-shadow: 0 0.5rem 1rem rgba(0,0,0,0.15); /* Add subtle shadow */
-    /* No max-height/overflow-y on desktop notification dropdown. */
+    background-color: white !important;
+    border: 1px solid #ced4da;
+    box-shadow: 0 0.5rem 1rem rgba(0,0,0,0.15);
+    max-height: 70vh;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
 }
 
 /* Adjust dropdown items within the white notification menu */
 .navbar-nav.ms-auto .dropdown-menu-end .dropdown-item {
-    color: #343a40; /* Darker text for white background */
+    color: #343a40;
+    padding: 0.75rem 1rem;
 }
 
 .navbar-nav.ms-auto .dropdown-menu-end .dropdown-item:hover {
-    background-color: #f8f9fa; /* Light hover effect */
+    background-color: #f8f9fa;
     color: #343a40;
 }
 
 .navbar-nav.ms-auto .dropdown-menu-end .dropdown-header {
-    color: #6c757d; /* Muted text for header */
+    color: #6c757d;
+    padding: 0.75rem 1rem;
 }
+
+/* Hamburger icon color */
+.custom-navbar .navbar-toggler {
+    border-color: rgba(255, 255, 255, 0.2);
+}
+.custom-navbar .navbar-toggler-icon {
+    background-image: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 30 30'%3e%3cpath stroke='rgba%28255, 255, 255, 0.7%29' stroke-linecap='round' stroke-miterlimit='10' stroke-width='2' d='M4 7h22M4 15h22M4 23h22'/%3e%3c/svg%3e");
+}
+
 
 /* === Card Styling === */
 .card {
     border: none;
     border-radius: 0.75rem;
     transition: box-shadow 0.3s ease, transform 0.3s ease;
+    margin-bottom: 1.5rem;
 }
 
 .card:hover {
     transform: translateY(-5px);
-    box-shadow: 0 0.5rem 1rem rgba(0,0,0,0.15)!important;
+    box-shadow: 0 0.5rem 1rem rgba(0,0,0,0.25)!important;
 }
 
 .card-title {
     font-weight: 700;
+    font-size: 1.5rem;
 }
 
 .card-body {
     background-color: white;
+    padding: 1.5rem;
 }
 
 /* === Form & Input Styling === */
-.form-group label {
+.form-group label, .form-label {
     font-weight: 600;
     margin-bottom: 0.5rem;
+    color: #343a40;
 }
 
-.form-control, .form-select {
+.form-control, .form-select, .input-group-text {
     border-radius: 0.5rem;
     border: 1px solid #ced4da;
     transition: border-color 0.2s ease, box-shadow 0.2s ease;
+    padding: 0.75rem 1rem;
 }
 
 .form-control:focus, .form-select:focus {
-    border-color: rgb(48, 12, 16);
+    border-color: rgb(48, 12, 16); /* Red */
     box-shadow: 0 0 0 0.25rem rgba(48, 12, 16, 0.25);
 }
+
+.form-floating > .form-control,
+.form-floating > .form-control-plaintext,
+.form-floating > .form-select {
+    padding-top: 1.625rem;
+    padding-bottom: 0.625rem;
+}
+.form-floating > label {
+    padding: 0.75rem 1rem;
+}
+
 
 /* === Button Styling === */
 .btn {
     border-radius: 0.5rem;
     font-weight: 600;
-    padding: 0.75rem 1.25rem;
+    padding: 0.85rem 1.5rem;
     transition: all 0.2s ease-in-out;
+    text-transform: capitalize;
 }
 
 .btn-primary {
     background-color: #0d6efd;
     border-color: #0d6efd;
+    color: white;
 }
 
 .btn-primary:hover {
     transform: translateY(-2px);
-    box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+    box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+    background-color: #0b5ed7;
+    border-color: #0a58ca;
 }
+
+.btn-secondary {
+    background-color: #6c757d;
+    border-color: #6c757d;
+    color: white;
+}
+.btn-secondary:hover {
+    background-color: #5c636a;
+    border-color: #565e64;
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+}
+
+.btn-success {
+    background-color: #198754; /* Green */
+    border-color: #198754;
+    color: white;
+}
+.btn-success:hover {
+    background-color: #157347;
+    border-color: #146c43;
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+}
+
+.btn-warning.text-dark {
+    background-color: #ffc107; /* Yellow */
+    border-color: #ffc107;
+    color: #212529 !important;
+}
+.btn-warning.text-dark:hover {
+    background-color: #ffae00;
+    border-color: #ffae00;
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+}
+
+.btn-danger {
+    background-color: #dc3545; /* Red */
+    border-color: #dc3545;
+    color: white;
+}
+.btn-danger:hover {
+    background-color: #bb2d3b;
+    border-color: #b02a37;
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+}
+
+.btn-info.text-white {
+    background-color: #0dcaf0;
+    border-color: #0dcaf0;
+    color: white !important;
+}
+.btn-info.text-white:hover {
+    background-color: #31d2f2;
+    border-color: #25cff2;
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+}
+
+
+/* Outline buttons */
+.btn-outline-primary {
+    color: #0d6efd;
+    border-color: #0d6efd;
+}
+.btn-outline-primary:hover {
+    background-color: #0d6efd;
+    color: white;
+}
+
+.btn-outline-secondary {
+    color: #6c757d;
+    border-color: #6c757d;
+}
+.btn-outline-secondary:hover {
+    background-color: #6c757d;
+    color: white;
+}
+
+.btn-outline-danger {
+    color: #dc3545;
+    border-color: #dc3545;
+}
+.btn-outline-danger:hover {
+    background-color: #dc3545;
+    color: white;
+}
+
+.btn-outline-success {
+    color: #198754;
+    border-color: #198754;
+}
+.btn-outline-success:hover {
+    background-color: #198754;
+    color: white;
+}
+
+.btn-outline-warning {
+    color: #ffc107;
+    border-color: #ffc107;
+}
+.btn-outline-warning:hover {
+    background-color: #ffc107;
+    color: #212529;
+}
+
+.btn-outline-info {
+    color: #0dcaf0;
+    border-color: #0dcaf0;
+}
+.btn-outline-info:hover {
+    background-color: #0dcaf0;
+    color: white;
+}
+
+
+.btn-sm {
+    padding: 0.4rem 0.8rem;
+    font-size: 0.875rem;
+    border-radius: 0.3rem;
+}
+
 
 /* === Table Styling === */
 .table {
     border-radius: 0.75rem;
-    overflow: hidden; /* Ensures the border radius is applied to the table corners */
+    overflow: hidden;
+    margin-bottom: 1.5rem;
 }
 
 .table thead {
@@ -148,6 +327,10 @@ body {
 
 .table th {
     padding: 1rem;
+    vertical-align: middle;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 .table td {
@@ -159,67 +342,171 @@ body {
     background-color: #e9ecef;
 }
 
+.table-responsive {
+    border-radius: 0.75rem;
+    border: 1px solid #dee2e6;
+    overflow-x: auto;
+    overflow-y: visible;
+    -webkit-overflow-scrolling: touch;
+    max-height: none;
+}
+.table-responsive > .table {
+    min-width: 600px;
+    width: 100%;
+}
+@media (max-width: 767.98px) {
+    .table-responsive .table thead th {
+        padding: 0.5rem 0.25rem;
+        font-size: 0.8rem;
+        white-space: normal;
+        width: 100px;
+    }
+    .table-responsive .table thead th:first-child {
+        width: 120px;
+    }
+    .table-responsive .table tbody td {
+        padding: 0.5rem 0.25rem;
+    }
+    .table-responsive .table tbody td .form-check-input {
+        transform: scale(1.2);
+    }
+}
+
+.table-responsive-lg table {
+    margin-bottom: 0;
+}
+
+
 /* === Alert Message Styling === */
 .alert {
     border-radius: 0.5rem;
-    padding: 1rem;
+    padding: 1rem 1.25rem;
+    margin-bottom: 1.5rem;
+    box-shadow: 0 2px 5px rgba(0,0,0,0.1);
 }
 
-/* === Login Page Specific Styling === */
 
+/* === Login Page Specific Styling === */
 .login-body {
     display: flex;
     align-items: center;
     justify-content: center;
-    height: 100vh;
+    min-height: 100vh;
     background-color: rgb(0 71 49);
     background-size: cover;
     background-position: center;
+    padding: 1rem;
 }
 
 .login-container {
-    background-color: rgb(48, 12, 16);
+    background-color: rgb(48, 12, 16); /* Red */
     padding: 2.5rem;
     border-radius: 0.75rem;
-    box-shadow: 0 0.5rem 1rem rgba(0,0,0,0.15)!important;
+    box-shadow: 0 0.75rem 1.5rem rgba(0,0,0,0.3);
     width: 100%;
-    max-width: 420px;
+    max-width: 450px;
+    text-align: center;
 }
 
 .login-container h2 {
-    color: white; /* <-- TEXT COLOR CHANGED HERE */
+    color: white;
+    font-size: 2rem;
+    margin-bottom: 1.5rem;
+}
+.login-container p {
+    color: rgba(255, 255, 255, 0.8);
 }
 
 .login-logo {
     display: block;
-    margin-left: auto;
-    margin-right: auto;
-    width: 250px;
-    height: 250px;
-    object-fit: cover;
+    margin: 0 auto 1.5rem auto;
+    width: 180px;
+    height: 180px;
+    object-fit: contain;
 }
 
-/* === Dashboard Specific Styling === */
+.login-container .form-floating > .form-control,
+.login-container .form-floating > .form-control-plaintext {
+    background-color: rgba(255, 255, 255, 0.1); /* Slightly transparent input */
+    border-color: rgba(255, 255, 255, 0.3);
+    color: white;
+    padding-top: 1.625rem;
+    padding-bottom: 0.625rem;
+}
+.login-container .form-floating > label {
+    color: rgba(255, 255, 255, 0.7); /* Lighter label text */
+    padding: 0.75rem 1rem;
+}
+.login-container .form-control:focus {
+    background-color: rgba(255, 255, 255, 0.2);
+    border-color: white;
+    box-shadow: 0 0 0 0.25rem rgba(255, 255, 255, 0.25);
+}
+.login-container .form-control::placeholder {
+    color: rgba(255, 255, 255, 0.5);
+}
 
+.login-container .input-group .btn-outline-secondary {
+    border-color: rgba(255, 255, 255, 0.3);
+    color: rgba(255, 255, 255, 0.7);
+    background-color: rgba(255, 255, 255, 0.1);
+}
+.login-container .input-group .btn-outline-secondary:hover {
+    background-color: rgba(255, 255, 255, 0.2);
+    color: white;
+}
+
+.login-container .form-check-input:checked {
+    background-color: #0d6efd;
+    border-color: #0d6efd;
+}
+.login-container .form-check-label {
+    color: rgba(255, 255, 255, 0.8);
+}
+.login-container a {
+    color: #0dcaf0;
+    text-decoration: none;
+    transition: color 0.2s ease-in-out;
+}
+.login-container a:hover {
+    color: #31d2f2;
+}
+
+
+/* === Dashboard Specific Styling === */
 .dashboard-header {
-    background: linear-gradient(135deg, rgb(68, 22, 36), rgb(48, 12, 16));
+    background: linear-gradient(135deg, rgb(68, 22, 36), rgb(48, 12, 16)); /* Red shades */
     color: white;
     padding: 2rem;
     border-radius: 0.75rem;
     margin-bottom: 2rem;
-    box-shadow: 0 4px 10px rgba(0,0,0,0.1);
+    box-shadow: 0 6px 15px rgba(0,0,0,0.2);
 }
 
 .dashboard-header h1 {
     font-weight: 700;
+    font-size: 2.25rem;
+    margin-bottom: 0.5rem;
 }
+.dashboard-header .lead {
+    font-size: 1.15rem;
+    color: rgba(255, 255, 255, 0.9);
+}
+
 
 .card-header-custom {
     background-color: #343a40;
     color: white;
     font-weight: 600;
-    padding: 0.75rem 1.25rem;
+    padding: 0.85rem 1.25rem;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    border-top-left-radius: calc(0.75rem - 1px);
+    border-top-right-radius: calc(0.75rem - 1px);
 }
+.card-header-custom:first-child {
+    border-radius: 0.75rem 0.75rem 0 0;
+}
+
 
 /* Base style for all status buttons */
 .status-btn {
@@ -227,11 +514,18 @@ body {
     font-size: 1.1rem;
     padding: 0.8rem 1.2rem;
     transition: all 0.2s ease-in-out;
+    display: flex;
+    align-items: center;
+    width: 100%;
+    margin-bottom: 0.5rem;
+}
+.status-btn i {
+    margin-right: 0.75rem;
 }
 
 /* Unique styles for each count status */
 .status-not-started {
-    background-color: #6c757d; /* Grey */
+    background-color: #6c757d;
     border: 2px solid #6c757d;
     color: white;
 }
@@ -239,6 +533,8 @@ body {
     background-color: #5a6268;
     border-color: #545b62;
     color: white;
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(0,0,0,0.2);
 }
 
 .status-counted {
@@ -249,6 +545,8 @@ body {
 .status-counted:hover {
     background-color: #ffc107;
     color: #343a40;
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(0,0,0,0.2);
 }
 
 .status-corrected {
@@ -259,33 +557,106 @@ body {
 .status-corrected:hover {
     background-color: #198754;
     color: white;
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(0,0,0,0.2);
 }
+
+/* Specific styling for alerts within dashboard cards */
+.dashboard-header + .row .alert {
+    padding: 1rem 1.25rem;
+    font-size: 1rem;
+}
+
 
 /* === Announcements Page Specific Styling === */
+.announcement-item {
+    border: 1px solid #dee2e6;
+    border-radius: 0.5rem;
+    margin-bottom: 1rem;
+    padding: 1.25rem;
+    transition: background-color 0.2s ease;
+}
+.announcement-item:hover {
+    background-color: #f8f9fa;
+}
+
+.announcement-item h5 {
+    font-size: 1.25rem;
+    margin-bottom: 0.5rem;
+}
 
 .announcement-item .meta-text {
-    font-size: 0.8rem;
-    color: #6c757d; /* Muted grey text */
+    font-size: 0.85rem;
+    color: #6c757d;
 }
 
-.announcement-item .actions a,
-.announcement-item .actions button {
-    font-size: 0.9rem;
-    padding: 0.2rem 0.5rem;
+.announcement-item .actions {
+    display: flex;
+    flex-wrap: wrap;
+    /* FIX: Align items top, and add consistent margin to badge */
+    align-items: flex-start; /* Align action block to the start */
+    margin-top: 0.5rem;
 }
+/* FIX: Style for the badge in the announcement list */
+.announcement-item .d-flex.w-100.justify-content-between .badge {
+    /* Ensure the badge doesn't take too much horizontal space and aligns with its content */
+    font-size: 0.75em; /* Smaller relative to parent font size */
+    padding: 0.4em 0.6em; /* Adequate padding */
+    border-radius: 0.25rem; /* Standard badge rounding */
+    flex-shrink: 0; /* Prevent it from shrinking too much */
+    margin-left: 1rem; /* Space from the title */
+    align-self: center; /* Vertically align with title */
+}
+.announcement-item .actions a.btn,
+.announcement-item .actions button.btn {
+    margin-left: 0;
+}
+
+#announcements .form-select[name="target_roles[]"] {
+    min-height: 120px;
+}
+
 
 /* === ADDED FOR v1.5 === */
 
 /* --- Footer Styling --- */
 .app-footer {
     padding: 1.5rem 0;
-    margin-top: 2rem;
-    color: rgba(255, 255, 255, 0.6);
+    margin-top: auto;
+    color: rgba(255, 255, 255, 0.7);
     text-align: center;
-    font-size: 0.9rem;
+    font-size: 0.95rem;
+    background-color: rgba(48, 12, 16, 0.8); /* Red, slightly transparent for footer */
+    box-shadow: 0 -2px 5px rgba(0,0,0,0.2);
+}
+.app-footer img {
+    margin-top: 0.5rem;
+    height: 40px;
+    width: auto;
 }
 
+/* Overall wrapper for sticky footer */
+.wrapper {
+    display: flex;
+    flex-direction: column;
+    min-height: 100vh;
+}
+.wrapper main {
+    flex-grow: 1;
+}
+
+
 /* === Scheduler Mobile Responsiveness === */
+
+/* Default state (desktop-first approach): Hide mobile cards, show table */
+.scheduler-mobile-cards {
+    display: none;
+}
+.scheduler-table-container {
+    display: block;
+}
+
+
 @media (max-width: 991.98px) {
   /* Make button group stack vertically */
   .scheduler-role-buttons {
@@ -317,15 +688,14 @@ body {
     margin-left: 0 !important;
   }
 
-  /* Hide the regular table on mobile */
+  /* On mobile: Hide the regular table, show mobile card view */
   .scheduler-table-container {
     display: none;
   }
-
-  /* Show mobile card view */
   .scheduler-mobile-cards {
     display: block;
   }
+
 
   /* Style for mobile cards */
   .staff-card {
@@ -390,17 +760,200 @@ body {
   .collapse-all-container {
     margin-bottom: 1rem;
     text-align: right;
-  }
-}
-
-@media (min-width: 992px) {
-  /* Hide mobile cards on desktop */
-  .scheduler-mobile-cards {
-    display: none;
+    display: flex;
+    justify-content: flex-end;
+    gap: 0.5rem;
   }
 
-  /* Show regular table on desktop */
-  .scheduler-table-container {
-    display: block;
+  /* Specific adjustment for `add_warning.html` dropdown */
+  #warned_user {
+      max-height: 200px;
+      overflow-y: auto;
+      overflow-x: hidden;
+      white-space: normal;
   }
+  #warned_user option {
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+  }
+
+    .table-responsive > .table:not(.scheduler-table-container .table) {
+        display: block;
+        width: 100%;
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+        min-width: 600px;
+    }
+
+    /* CRITICAL FIX: Ensure the expanded navbar collapse menu is scrollable */
+    .custom-navbar .navbar-collapse {
+        background-color: rgb(48, 12, 16);
+        padding: 1rem;
+        border-radius: 0.5rem;
+        margin-top: 0.5rem;
+        box-shadow: 0 8px 16px rgba(0,0,0,0.3);
+
+        max-height: calc(100vh - 80px);
+        overflow-y: auto;
+        overflow-x: hidden;
+        -webkit-overflow-scrolling: touch;
+    }
+
+    .custom-navbar .dropdown-menu {
+        position: static !important;
+        float: none;
+        width: 100%;
+        margin-top: 0.5rem;
+        background-color: rgba(48, 12, 16, 0.98);
+        border: none;
+        box-shadow: none;
+        border-radius: 0.25rem;
+        max-height: none;
+        overflow-y: visible;
+    }
+    .custom-navbar .dropdown-menu .dropdown-item,
+    .custom-navbar .dropdown-menu .dropdown-header,
+    .custom-navbar .dropdown-menu .dropdown-divider {
+        padding-left: 1.5rem;
+        padding-right: 1.5rem;
+    }
+    .navbar-nav.ms-auto .dropdown-menu-end {
+        background-color: #f8f9fa !important;
+        color: #343a40;
+    }
+    .navbar-nav.ms-auto .dropdown-menu-end .dropdown-item {
+        color: #343a40 !important;
+    }
+
+    /* Adjust padding for the main content area on small screens */
+    .container, .container-fluid {
+        padding-left: 1rem;
+        padding-right: 1rem;
+    }
+
+    /* Reduce font size for card titles if they become too large on mobile */
+    .card-title {
+        font-size: 1.35rem;
+    }
+    .dashboard-header h1 {
+        font-size: 1.8rem;
+    }
 }
+
+/* === ADDED: General UI/UX Improvements === */
+
+/* Focus state for interactive elements (links, buttons) */
+a:focus, button:focus {
+    outline: 3px solid rgba(0, 71, 49, 0.5); /* Greenish outline */
+    outline-offset: 2px;
+    border-radius: 0.5rem; /* Match button/card radius */
+}
+
+/* Scrollbar styling for improved aesthetics (optional, but good for UX) */
+::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+}
+::-webkit-scrollbar-track {
+    background: #f1f1f1;
+    border-radius: 10px;
+}
+::-webkit-scrollbar-thumb {
+    background: rgb(48, 12, 16); /* Red scrollbar */
+    border-radius: 10px;
+}
+::-webkit-scrollbar-thumb:hover {
+    background: rgb(68, 22, 36); /* Darker red on hover */
+}
+
+/* Input groups alignment for mobile */
+.input-group > :not(:first-child):not(.dropdown-menu):not(.form-floating),
+.input-group > .form-floating:not(:first-child) {
+    border-top-left-radius: 0.5rem;
+    border-bottom-left-radius: 0.5rem;
+}
+.input-group > :not(:last-child):not(.dropdown-toggle):not(.dropdown-menu):not(.form-floating),
+.input-group > .form-floating:not(:last-child):not(.dropdown-toggle):not(.dropdown-menu) {
+    border-top-right-radius: 0.5rem;
+    border-bottom-right-radius: 0.5rem;
+}
+
+
+/* Styling for filter bars (like _filter_bar.html) */
+.p-4.rounded-3.mb-4[style*="background-color: #f8f9fa"] {
+    padding: 1.5rem !important;
+    border: 1px solid #e9ecef;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+}
+
+/* Specific styling for the add product/view options collapses */
+.p-4.rounded-3.mb-4[style*="background-color: #e9ecef"] {
+    padding: 1.5rem !important;
+    border: 1px solid #dee2e6;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+}
+.p-4.rounded-3.mb-4[style*="background-color: #f8f9fa"] .btn-group {
+    flex-wrap: wrap;
+}
+.p-4.rounded-3.mb-4[style*="background-color: #f8f9fa"] .btn-group .btn {
+    margin-bottom: 0.5rem;
+}
+
+
+/* Text for disabled links/buttons that are actually interactive but state-disabled */
+.alert-link {
+    font-weight: 600;
+}
+.alert-link:hover {
+    text-decoration: underline;
+}
+
+/* Ensure icons in lists/buttons are aligned well */
+.btn i.fas, .list-group-item i.fas {
+    vertical-align: middle;
+}
+
+/* Remove default margin on forms inside cards */
+.card-body > form {
+    margin-bottom: 0;
+}
+
+/* Adjust padding for smaller `form-row-halved` (products.html add form) */
+.form-row-halved .col-md-4 {
+    margin-bottom: 1rem;
+}
+@media (min-width: 768px) {
+    .form-row-halved .col-md-4:nth-child(3n) {
+        margin-bottom: 0;
+    }
+}
+.form-row-halved .col-md-4:last-child {
+    margin-bottom: 0;
+}
+.form-row-halved .align-items-end {
+    display: flex;
+    align-items: flex-end;
+}
+.form-row-halved .input-group {
+    width: 100%;
+}
+
+/* --- FIX FOR SCHEDULER DROPDOWN OVERLAP --- */
+/* Target the select element specifically */
+.shift-assignment-select {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    padding-right: 2.5rem !important;
+    background-position: right 0.75rem center;
+}
+
+/* Ensure options also truncate if they are too long when the dropdown is open */
+.shift-assignment-select option {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    padding-right: 1.5rem;
+}
+/* END FIX FOR SCHEDULER DROPDOWN OVERLAP */

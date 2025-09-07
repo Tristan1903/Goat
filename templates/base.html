@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{% block title %}Inventory Management{% endblock %}</title>
+    <title>{% block title %}Goat & Co. Portal{% endblock %}</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -11,6 +11,36 @@
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link href="{{ url_for('static', filename='styles.css') }}" rel="stylesheet">
     <link rel="icon" href="{{ url_for('static', filename='logo.ico') }}" type="image/x-icon">
+
+    {# IMPORTANT: Define flashMessage here in the HEAD section #}
+    <script>
+        // Explicitly define flashMessage on the global window object
+        window.flashMessage = function(message, category) {
+            const toastContainer = document.querySelector('.toast-container');
+            if (!toastContainer) {
+                // Fallback to create if somehow not yet in DOM for very early calls
+                // This might create it in the head, but it will be visually handled by the one in the body
+                const newToastContainer = document.createElement('div');
+                newToastContainer.classList.add('toast-container', 'position-fixed', 'bottom-0', 'end-0', 'p-3');
+                newToastContainer.style.zIndex = '1080';
+                document.body.appendChild(newToastContainer); // Append to body even if in head
+                return window.flashMessage(message, category); // Recursive call also needs window.
+            }
+
+            const toastHTML = `
+                <div class="toast align-items-center text-white bg-${category} border-0" role="alert" aria-live="assertive" aria-atomic="true">
+                    <div class="d-flex">
+                        <div class="toast-body">${message}</div>
+                        <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast" aria-label="Close"></button>
+                    </div>
+                </div>`;
+            toastContainer.insertAdjacentHTML('beforeend', toastHTML);
+            const newToastEl = toastContainer.lastElementChild;
+            const newToast = new bootstrap.Toast(newToastEl);
+            newToast.show();
+            newToastEl.addEventListener('hidden.bs.toast', () => newToastEl.remove());
+        };
+    </script>
 </head>
 <body class="d-flex flex-column min-vh-100">
     <nav class="navbar navbar-expand-lg navbar-dark custom-navbar">
@@ -25,118 +55,149 @@
                 <ul class="navbar-nav me-auto">
                     {% if current_user.is_authenticated %}
 
-                        <!-- ===== UNIVERSAL LINKS ===== -->
+                        <!-- ===== 1. Dashboard (Always First) ===== -->
                         <li class="nav-item"><a class="nav-link" href="{{ url_for('dashboard') }}">Dashboard</a></li>
 
-                        <!-- Announcements -->
+                        <!-- ===== 2. Announcements (Direct Link) ===== -->
+                        {# Show announcements to all roles except scheduler by default, unless they are an admin/GM/owner #}
                         {% if not current_user.has_role('scheduler') or current_user.has_role('system_admin') or current_user.has_role('general_manager') or current_user.has_role('owners') %}
                         <li class="nav-item"><a class="nav-link" href="{{ url_for('announcements') }}">Announcements</a></li>
                         {% endif %}
 
-                        <!-- Leave -->
-                        {% if not current_user.has_role('scheduler') or current_user.has_role('system_admin') or current_user.has_role('general_manager') or current_user.has_role('owners') %}
-                        <li class="nav-item"><a class="nav-link" href="{{ url_for('leave_requests') }}">Leave</a></li>
-                        {% endif %}
-
-                        <!-- ===== STAFF-SPECIFIC LINKS ===== -->
-                        {% if current_user.has_role('bartender') or current_user.has_role('waiter') or current_user.has_role('skullers') or current_user.has_role('manager') or current_user.has_role('general_manager') or current_user.has_role('system_admin') %}
-                            <li class="nav-item"><a class="nav-link" href="{{ url_for('submit_shifts') }}">Submit Availability</a></li>
-                        {% endif %}
-
-                        <!-- My Schedule (Now a Dropdown for Schedulers/Managers/Staff) -->
-                        {% if current_user.has_role('bartender') or current_user.has_role('waiter') or current_user.has_role('skullers') or current_user.has_role('manager') or current_user.has_role('general_manager') or current_user.has_role('scheduler') or current_user.has_role('system_admin') %}
-                            <li class="nav-item dropdown">
-                                <a class="nav-link dropdown-toggle" href="#" id="scheduleViewDropdown" role="button" data-bs-toggle="dropdown" aria-expanded="false">Schedules</a>
-                                <ul class="dropdown-menu" aria-labelledby="scheduleViewDropdown">
-                                    <li><a class="dropdown-item" href="{{ url_for('my_schedule', view='personal') }}">View My Shifts</a></li>
-
-                                    <!-- Consolidated Staff Schedules -->
-                                    <li><hr class="dropdown-divider"></li>
-                                    <li><h6 class="dropdown-header">Consolidated Staff Schedules</h6></li>
-
-                                    {# MODIFIED: Use BOH and FOH endpoints directly for staff #}
-                                    {% if current_user.has_role('bartender') or current_user.has_role('skullers') or current_user.has_role('manager') or current_user.has_role('general_manager') or current_user.has_role('scheduler') or current_user.has_role('system_admin') %}
-                                        <li><a class="dropdown-item" href="{{ url_for('my_schedule', view='boh') }}">Back of House (BOH) Schedule</a></li>
-                                    {% endif %}
-                                    {% if current_user.has_role('waiter') or current_user.has_role('manager') or current_user.has_role('general_manager') or current_user.has_role('scheduler') or current_user.has_role('system_admin') %}
-                                        <li><a class="dropdown-item" href="{{ url_for('my_schedule', view='foh') }}">Front of House (FOH) Schedule</a></li>
-                                    {% endif %}
-
-                                    <!-- Managers Schedule -->
-                                    {% if current_user.has_role('manager') or current_user.has_role('general_manager') or current_user.has_role('scheduler') or current_user.has_role('system_admin') %}
-                                        <li><a class="dropdown-item" href="{{ url_for('my_schedule', view='managers') }}">Managers Schedule</a></li>
-
-                                        <!-- Individual Role Schedules (mostly for managers/admins who need granular view) -->
-                                        <li><hr class="dropdown-divider"></li>
-                                        <li><h6 class="dropdown-header">Individual Role Schedules</h6></li>
-                                        <li><a class="dropdown-item" href="{{ url_for('my_schedule', view='bartenders') }}">Bartenders Only</a></li>
-                                        <li><a class="dropdown-item" href="{{ url_for('my_schedule', view='waiters') }}">Waiters Only</a></li>
-                                        <li><a class="dropdown-item" href="{{ url_for('my_schedule', view='skullers') }}">Skullers Only</a></li>
-                                    {% endif %}
-                                </ul>
-                            </li>
-                        {% endif %}
-
-                        <!-- ===== INVENTORY & RECIPES (Hidden from Waiter/Scheduler/Skullers - Business Owner sees Reports) ===== -->
-                        {% if current_user.has_role('bartender') or current_user.has_role('manager') or current_user.has_role('general_manager') or current_user.has_role('system_admin') or current_user.has_role('owners') %}
+                        <!-- ===== 3. My Hub / Staffing (Dropdown) ===== -->
+                        {# Define roles that typically use 'My Hub' for cleaner logic #}
+                        {% set my_hub_roles_list = ['bartender', 'waiter', 'skullers', 'manager', 'general_manager', 'scheduler', 'system_admin', 'owners'] %}
+                        {% if my_hub_roles_list | select('in', current_user.role_names) | list | length > 0 %}
                         <li class="nav-item dropdown">
-                            <a class="nav-link dropdown-toggle" href="#" id="inventoryDropdown" role="button" data-bs-toggle="dropdown" aria-expanded="false">Inventory & Recipes</a>
+                            <a class="nav-link dropdown-toggle" href="#" id="myHubDropdown" role="button" data-bs-toggle="dropdown" aria-expanded="false">My Hub</a>
+                            <ul class="dropdown-menu" aria-labelledby="myHubDropdown">
+                                <li><h6 class="dropdown-header">Personal Schedules & Availability</h6></li>
+                                <li><a class="dropdown-item" href="{{ url_for('my_schedule', view='personal') }}">View My Shifts</a></li>
+                                
+                                {# Submit Availability is available to most staff/managers #}
+                                {% if current_user.has_role('bartender') or current_user.has_role('waiter') or current_user.has_role('skullers') or current_user.has_role('manager') or current_user.has_role('general_manager') or current_user.has_role('system_admin') %}
+                                    <li><a class="dropdown-item" href="{{ url_for('submit_shifts') }}">Submit Availability</a></li>
+                                {% endif %}
+                                
+                                {# Leave Requests is available to all non-scheduler roles, plus admins/GMs/owners #}
+                                {% if not current_user.has_role('scheduler') or current_user.has_role('system_admin') or current_user.has_role('general_manager') or current_user.has_role('owners') %}
+                                    <li><a class="dropdown-item" href="{{ url_for('leave_requests') }}">Leave Requests</a></li>
+                                {% endif %}
+
+                                {# Consolidated Schedules and Shift Management are primarily for managers/schedulers/admins #}
+                                {% if current_user.has_role('manager') or current_user.has_role('general_manager') or current_user.has_role('scheduler') or current_user.has_role('system_admin') %}
+                                    <li><hr class="dropdown-divider"></li>
+                                    <li><h6 class="dropdown-header">Consolidated Schedules</h6></li>
+                                    
+                                    {# BOH Schedule for bartenders/skullers and managers overseeing them #}
+                                    {% if current_user.has_role('bartender') or current_user.has_role('skullers') or current_user.has_role('manager') or current_user.has_role('general_manager') or current_user.has_role('scheduler') or current_user.has_role('system_admin') %}
+                                        <li><a class="dropdown-item" href="{{ url_for('my_schedule', view='boh') }}">Back of House (BOH)</a></li>
+                                    {% endif %}
+                                    
+                                    {# FOH Schedule for waiters and managers overseeing them #}
+                                    {% if current_user.has_role('waiter') or current_user.has_role('manager') or current_user.has_role('general_manager') or current_user.has_role('scheduler') or current_user.has_role('system_admin') %}
+                                        <li><a class="dropdown-item" href="{{ url_for('my_schedule', view='foh') }}">Front of House (FOH)</a></li>
+                                    {% endif %}
+                                    
+                                    <li><a class="dropdown-item" href="{{ url_for('my_schedule', view='managers') }}">Managers</a></li>
+                                    
+                                    <li><hr class="dropdown-divider"></li>
+                                    <li><h6 class="dropdown-header">Shift Management</h6></li>
+                                    
+                                    {% if current_user.has_role('manager') or current_user.has_role('general_manager') or current_user.has_role('system_admin') %}
+                                        <li><a class="dropdown-item" href="{{ url_for('manage_swaps') }}">Manage Swaps</a></li>
+                                        <li><a class="dropdown-item" href="{{ url_for('manage_volunteered_shifts') }}">Manage Volunteered Shifts</a></li>
+                                    {% endif %}
+                                {% endif %}
+                            </ul>
+                        </li>
+                        {% endif %}
+
+                        <!-- ===== 4. Inventory (Dropdown) ===== -->
+                        {# Define roles that typically access Inventory for cleaner logic #}
+                        {% set inventory_roles_list = ['bartender', 'manager', 'general_manager', 'system_admin', 'owners'] %}
+                        {% if inventory_roles_list | select('in', current_user.role_names) | list | length > 0 %}
+                        <li class="nav-item dropdown">
+                            <a class="nav-link dropdown-toggle" href="#" id="inventoryDropdown" role="button" data-bs-toggle="dropdown" aria-expanded="false">Inventory</a>
                             <ul class="dropdown-menu" aria-labelledby="inventoryDropdown">
+                                <li><h6 class="dropdown-header">Daily Operations</h6></li>
+                                
                                 {% if current_user.has_role('system_admin') or current_user.has_role('manager') or current_user.has_role('bartender') %}
                                     <li><a class="dropdown-item" href="{{ url_for('recipes') }}">Recipe Book</a></li>
                                 {% endif %}
+                                
                                 {% if current_user.has_role('bartender') or current_user.has_role('manager') or current_user.has_role('general_manager') or current_user.has_role('system_admin') %}
                                     <li><hr class="dropdown-divider"></li>
                                     <li><h6 class="dropdown-header">Counts</h6></li>
                                     {% for location in all_locations %}
-                                        <li><a class="dropdown-item" href="{{ url_for('submit_count', location_slug=location.name|replace(' ', '_')|lower) }}">{{ location.name }}</a></li>
+                                        <li><a class="dropdown-item" href="{{ url_for('submit_count', location_slug=location.name|replace(' ', '_')|lower) }}">{{ location.name }} Count</a></li>
                                     {% else %}
                                         <li><a class="dropdown-item disabled" href="#">No locations defined</a></li>
                                     {% endfor %}
+                                    
+                                    <li><hr class="dropdown-divider"></li>
+                                    <li><h6 class="dropdown-header">Sales & Stock</h6></li>
+                                    <li><a class="dropdown-item" href="{{ url_for('beginning_of_day') }}">Submit Sales (BOD)</a></li>                                    
+                                    <li><a class="dropdown-item" href="{{ url_for('eod_report') }}">Submit Closing Report</a></li>
+                                    <li><a class="dropdown-item" href="{{ url_for('deliveries') }}">Manage Deliveries</a></li>
                                 {% endif %}
+
+                                {# Reports & Products are typically manager/admin/owner roles #}
                                 {% if current_user.has_role('manager') or current_user.has_role('general_manager') or current_user.has_role('system_admin') or current_user.has_role('owners') %}
                                     <li><hr class="dropdown-divider"></li>
                                     <li><h6 class="dropdown-header">Reports & Products</h6></li>
+                                    <li><a class="dropdown-item" href="{{ url_for('daily_summary') }}">Daily Summary Report</a></li>
                                     <li><a class="dropdown-item" href="{{ url_for('variance') }}">View Variance</a></li>
                                     <li><a class="dropdown-item" href="{{ url_for('variance_explanations') }}">Variance Explanations</a></li>
-                                    <li><a class="dropdown-item" href="{{ url_for('daily_summary') }}">Daily Summary Report</a></li>
                                     <li><a class="dropdown-item" href="{{ url_for('reports') }}">Inventory Log</a></li>
                                     <li><a class="dropdown-item" href="{{ url_for('historical_report') }}">Historical Reports</a></li>
+                                    <li><a class="dropdown-item" href="{{ url_for('products') }}">Manage Products</a></li>
                                 {% endif %}
                             </ul>
                         </li>
                         {% endif %}
 
-                        <!-- ===== MANAGEMENT DROPDOWN ===== -->
-                        {% set management_roles = ['manager', 'general_manager', 'scheduler', 'system_admin', 'owners'] %}
-                        {% if management_roles | select('in', current_user.role_names) | list | length > 0 %}
+                        <!-- ===== 5. Admin / Operations (Dropdown) ===== -->
+                        {# Define roles that typically access Admin/Ops for cleaner logic #}
+                        {% set admin_ops_roles_list = ['manager', 'general_manager', 'scheduler', 'system_admin', 'owners'] %}
+                        {% if admin_ops_roles_list | select('in', current_user.role_names) | list | length > 0 %}
                         <li class="nav-item dropdown">
-                            <a class="nav-link dropdown-toggle" href="#" id="managementDropdown" role="button" data-bs-toggle="dropdown" aria-expanded="false">Management</a>
-                            <ul class="dropdown-menu" aria-labelledby="managementDropdown">
-                                {% if current_user.has_role('scheduler') or current_user.has_role('manager') or current_user.has_role('general_manager') or current_user.has_role('system_admin') %}
-                                    <li><a class="dropdown-item" href="{{ url_for('scheduler') }}">Scheduler</a></li>
+                            <a class="nav-link dropdown-toggle" href="#" id="adminOpsDropdown" role="button" data-bs-toggle="dropdown" aria-expanded="false">Admin & Ops</a>
+                            <ul class="dropdown-menu" aria-labelledby="adminOpsDropdown">
+                                {# Scheduler Tool is primarily for schedulers/GMs/Admins #}
+                                {% if current_user.has_role('scheduler') or current_user.has_role('general_manager') or current_user.has_role('system_admin') %}
+                                    <li><h6 class="dropdown-header">Scheduling Tools</h6></li>
+                                    <li><a class="dropdown-item" href="{{ url_for('scheduler') }}">Scheduler Tool</a></li>
+                                    {# Linking to Bartender minimums as a common default entry point #}
+                                    <li><a class="dropdown-item" href="{{ url_for('manage_required_staff', role_name='bartender') }}">Manage Staff Minimums</a></li> 
                                 {% endif %}
+                                
+                                {# User Management for managers/GMs/Admins #}
                                 {% if current_user.has_role('manager') or current_user.has_role('general_manager') or current_user.has_role('system_admin') %}
-                                    <li><a class="dropdown-item" href="{{ url_for('manage_swaps') }}">Manage Swaps</a></li>
-                                    <li><a class="dropdown-item" href="{{ url_for('manage_volunteered_shifts') }}">Manage Volunteered Shifts</a></li>
                                     <li><hr class="dropdown-divider"></li>
+                                    <li><h6 class="dropdown-header">User Management</h6></li>
                                     <li><a class="dropdown-item" href="{{ url_for('manage_users') }}">Manage Users</a></li>
-                                {% endif %}
-                                {% if current_user.has_role('manager') or current_user.has_role('general_manager') or current_user.has_role('system_admin') %}
                                     <li><a class="dropdown-item" href="{{ url_for('active_users') }}">Active Users</a></li>
-                                    <li><hr class="dropdown-divider"></li>
-                                    <li><a class="dropdown-item" href="{{ url_for('beginning_of_day') }}">Submit Sales</a></li>
+                                    <li><a class="dropdown-item" href="{{ url_for('manage_warnings') }}">Manage Warnings</a></li>
                                 {% endif %}
+                                
+                                {# System Setup for GMs/Admins #}
                                 {% if current_user.has_role('general_manager') or current_user.has_role('system_admin') %}
+                                    <li><hr class="dropdown-divider"></li>
+                                    <li><h6 class="dropdown-header">System Setup</h6></li>
                                     <li><a class="dropdown-item" href="{{ url_for('manage_locations') }}">Manage Locations</a></li>
                                 {% endif %}
-                                {% if current_user.has_role('manager') or current_user.has_role('general_manager') or current_user.has_role('system_admin') or current_user.has_role('owners') %}
-                                <li><a class="dropdown-item" href="{{ url_for('deliveries') }}">Manage Deliveries</a></li>
-                                <li><a class="dropdown-item" href="{{ url_for('products') }}">Manage Products</a></li>
+                                
+                                {# Business Tools for Owners/Admins #}
+                                {% if current_user.has_role('owners') or current_user.has_role('system_admin') %}
+                                    <li><hr class="dropdown-divider"></li>
+                                    <li><h6 class="dropdown-header">Business Tools</h6></li>
+                                    <li><a class="dropdown-item" href="{{ url_for('bookings') }}">Manage Bookings</a></li>
                                 {% endif %}
                             </ul>
                         </li>
                         {% endif %}
+                        
                     {% endif %}
                 </ul>
                 <ul class="navbar-nav ms-auto align-items-center">
@@ -160,12 +221,6 @@
                                 <li class="p-2 border-top text-center">
                                     <a href="{{ url_for('announcements') }}">View all announcements</a>
                                 </li>
-                                <!-- NEW: Push Notification Button/Status -->
-                                <li class="p-2 border-top text-center" id="push-notification-status-area">
-                                    <div class="onesignal-customlink-container" >
-                                    <button id="enablePushNotifications" class="btn btn-sm btn-primary">Enable Notifications</button></div>
-                                    <span id="pushNotificationStatus" class="small text-muted" style="display: none;"></span>
-                                </li>
                             </ul>
                         </li>
                         <li class="nav-item dropdown">
@@ -181,6 +236,10 @@
                                 </h6></li>
                                 <li><a class="dropdown-item" href="{{ url_for('user_manual') }}"><i class="fas fa-book me-2"></i>User Manual</a></li>
                                 <li><a class="dropdown-item" href="{{ url_for('change_password') }}"><i class="fas fa-key me-2"></i>Change Password</a></li>
+                                {# NEW: Google Drive Link #}
+                                {% if current_user.has_role('manager') or current_user.has_role('general_manager') or current_user.has_role('system_admin') or current_user.has_role('owners') %}
+                                    <li><a class="dropdown-item" href="https://drive.google.com/drive/u/0/my-drive" target="_blank"><i class="fab fa-google-drive me-2"></i>Google Drive</a></li>
+                                {% endif %}
                                 <li><hr class="dropdown-divider"></li>
                                 <li><a class="dropdown-item text-danger" href="{{ url_for('logout') }}"><i class="fas fa-sign-out-alt me-2"></i>Logout</a></li>
                             </ul>
@@ -213,13 +272,11 @@
         </div>
     </footer>
 
-    {% if current_user.is_authenticated %}
+    {# The toast container is needed for flashMessage, always include it #}
     <div class="toast-container position-fixed bottom-0 end-0 p-3"></div>
-    {% endif %}
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 
-    {# Main application JavaScript block #}
     <script>
         document.addEventListener('DOMContentLoaded', function() {
             var tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'));
@@ -227,23 +284,41 @@
                 return new bootstrap.Tooltip(tooltipTriggerEl);
             });
 
-            const searchInput = document.getElementById('product-search');
-            const typeFilter = document.getElementById('type-filter');
-            if (searchInput || typeFilter) {
-                const productRows = document.querySelectorAll('table tbody tr');
-                function filterProducts() {
-                    const searchTerm = searchInput.value.toLowerCase();
-                    const selectedType = typeFilter.value;
+            // Generic table filter initialization function
+            function initializeTableFilters(searchInputId, typeFilterId, tableBodySelector) {
+                const searchInput = document.getElementById(searchInputId);
+                const typeFilter = document.getElementById(typeFilterId);
+                const tableBody = document.querySelector(tableBodySelector);
+
+                if (!tableBody) {
+                    console.warn(`Table body with selector "${tableBodySelector}" not found for filter initialization.`);
+                    return;
+                }
+
+                const productRows = Array.from(tableBody.querySelectorAll('tr'));
+
+                function filterTableRows() {
+                    const searchTerm = searchInput ? searchInput.value.toLowerCase() : '';
+                    const selectedType = typeFilter ? typeFilter.value : 'all';
+
                     productRows.forEach(row => {
-                        const productName = row.querySelector('.product-name').textContent.toLowerCase();
-                        const productType = row.querySelector('.product-type').textContent;
-                        const nameMatch = productName.includes(searchTerm);
-                        const typeMatch = (selectedType === 'all' || productType === selectedType);
+                        const productNameCell = row.querySelector('.product-name');
+                        const productTypeCell = row.querySelector('.product-type');
+
+                        const productName = productNameCell ? productNameCell.textContent.toLowerCase() : '';
+                        const productType = productTypeCell ? productTypeCell.textContent : '';
+
+                        const nameMatch = !searchInput || productName.includes(searchTerm);
+                        const typeMatch = !typeFilter || (selectedType === 'all' || productType === selectedType);
+
                         row.style.display = (nameMatch && typeMatch) ? '' : 'none';
                     });
                 }
-                if (searchInput) searchInput.addEventListener('keyup', filterProducts);
-                if (typeFilter) typeFilter.addEventListener('change', filterProducts);
+
+                if (searchInput) searchInput.addEventListener('keyup', filterTableRows);
+                if (typeFilter) typeFilter.addEventListener('change', filterTableRows);
+
+                filterTableRows();
             }
 
             document.querySelectorAll('.password-toggle-btn').forEach(button => {
@@ -279,155 +354,41 @@
                 });
             }
         });
-    </script>
 
-    {% if current_user.is_authenticated %}
-    <script>
-        let lastSeenAnnouncementId = null;
-        const currentUserID = parseInt('{{ current_user.id }}', 10);
-        function createToast(title, message, author) {
-            const toastContainer = document.querySelector('.toast-container');
-            const toastHTML = `<div class="toast" role="alert" aria-live="assertive" aria-atomic="true"><div class="toast-header"><strong class="me-auto"><i class="fas fa-bullhorn me-2"></i>New Announcement</strong><small>just now</small><button type="button" class="btn-close" data-bs-dismiss="toast" aria-label="Close"></button></div><div class="toast-body"><strong>${title}</strong><br>${message}<div class="text-muted small mt-2">- ${author}</div></div></div>`;
-            toastContainer.insertAdjacentHTML('beforeend', toastHTML);
-            const newToastEl = toastContainer.lastElementChild;
-            const newToast = new bootstrap.Toast(newToastEl);
-            newToast.show();
-            newToastEl.addEventListener('hidden.bs.toast', () => newToastEl.remove());
-        }
-        async function checkForNewAnnouncements() {
-            try {
-                const response = await fetch('/api/latest-announcement');
-                const latest = await response.json();
-                if (lastSeenAnnouncementId === null) {
-                    lastSeenAnnouncementId = latest ? latest.id : 0;
-                    return;
-                }
-                if (latest && latest.id > lastSeenAnnouncementId && latest.user_id !== currentUserID) {
-                    lastSeenAnnouncementId = latest.id;
-                    createToast(latest.title, latest.message, latest.user_name);
-                }
-            } catch (error) {
-                console.error("Error checking for announcements:", error);
+        {# This block for checkForNewAnnouncements is correctly wrapped for authenticated users #}
+        {% if current_user.is_authenticated %}
+        <script>
+            let lastSeenAnnouncementId = null;
+            const currentUserID = parseInt('{{ current_user.id }}', 10);
+            function createToast(title, message, author) {
+                const toastContainer = document.querySelector('.toast-container');
+                const toastHTML = `<div class="toast" role="alert" aria-live="assertive" aria-atomic="true"><div class="toast-header"><strong class="me-auto"><i class="fas fa-bullhorn me-2"></i>New Announcement</strong><small>just now</small><button type="button" class="btn-close" data-bs-dismiss="toast" aria-label="Close"></button></div><div class="toast-body"><strong>${title}</strong><br>${message}<div class="text-muted small mt-2">- ${author}</div></div></div>`;
+                toastContainer.insertAdjacentHTML('beforeend', toastHTML);
+                const newToastEl = toastContainer.lastElementChild;
+                const newToast = new bootstrap.Toast(newToastEl);
+                newToast.show();
+                newToastEl.addEventListener('hidden.bs.toast', () => newToastEl.remove());
             }
-        }
-        checkForNewAnnouncements();
-        setInterval(checkForNewAnnouncements, 10000);
-    </script>
-    {% endif %}
-    {% block scripts %}
-    <script>
-        // Dynamically load OneSignal SDK script
-        (function() {
-            var script = document.createElement('script');
-            script.src = "https://cdn.onesignal.com/sdks/OneSignalSDK.js";
-            script.async = true;
-            document.head.appendChild(script);
-        })();
-
-        window.OneSignal = window.OneSignal || [];
-        OneSignal.push(function() {
-            // OneSignal Initialization
-            OneSignal.init({
-                appId: "{{config['ONESIGNAL_APP_ID'] }}",
-                safari_web_id: 'YOUR_SAFARI_WEB_ID', // Only if you plan to support Safari
-                allowLocalhostAsSecureOrigin: true // IMPORTANT FOR LOCALHOST
-            });
-
-            // Set External User ID if authenticated
-            {% if current_user.is_authenticated %}
-            OneSignal.setExternalUserId("{{ current_user.id }}");
-            {% endif %}
-
-            const enablePushBtn = document.getElementById('enablePushNotifications');
-            const pushStatusSpan = document.getElementById('pushNotificationStatus');
-            const pushStatusArea = document.getElementById('push-notification-status-area');
-
-            // Function to update the button/status display
-            function updatePushNotificationUI(isSubscribed) {
-                if (!pushStatusArea) return; // Exit if the area doesn't exist
-
-                if (isSubscribed) {
-                    if (enablePushBtn) enablePushBtn.style.display = 'none';
-                    if (pushStatusSpan) {
-                        pushStatusSpan.textContent = 'Notifications are enabled.';
-                        pushStatusSpan.style.display = 'inline';
-                        pushStatusSpan.classList.remove('text-danger');
-                        pushStatusSpan.classList.add('text-success');
+            async function checkForNewAnnouncements() {
+                try {
+                    const response = await fetch('/api/latest-announcement');
+                    const latest = await response.json();
+                    if (lastSeenAnnouncementId === null) {
+                        lastSeenAnnouncementId = latest ? latest.id : 0;
+                        return;
                     }
-                } else {
-                    // Not subscribed, but might be blocked
-                    OneSignal.getNotificationPermission(function(permission) {
-                        if (permission === 'denied') {
-                            if (enablePushBtn) enablePushBtn.style.display = 'none';
-                            if (pushStatusSpan) {
-                                pushStatusSpan.innerHTML = 'Notifications are blocked. Please allow them in your browser settings.';
-                                pushStatusSpan.style.display = 'inline';
-                                pushStatusSpan.classList.remove('text-success');
-                                pushStatusSpan.classList.add('text-danger');
-                            }
-                        } else {
-                            // Not subscribed, but permission is 'default' or 'granted'
-                            if (enablePushBtn) enablePushBtn.style.display = 'inline';
-                            if (pushStatusSpan) pushStatusSpan.style.display = 'none';
-                        }
-                    });
+                    if (latest && latest.id > lastSeenAnnouncementId && latest.user_id !== currentUserID) {
+                        lastSeenAnnouncementId = latest.id;
+                        createToast(latest.title, latest.message, latest.user_name);
+                    }
+                } catch (error) {
+                    console.error("Error checking for announcements:", error);
                 }
             }
-
-            // Initial check and UI update on load
-            OneSignal.isPushNotificationsEnabled(function(isSubscribed) {
-                updatePushNotificationUI(isSubscribed);
-            });
-
-            // Event listener for when the user clicks the "Enable Notifications" button
-            if (enablePushBtn) {
-                
-                enablePushBtn.addEventListener('click', function() {
-                    console.log("Enable Push Notifications button found.");
-                    OneSignal.push(function() {
-                        OneSignal.showNativePrompt(); // Show the browser's native prompt
-                        // After the prompt, check subscription status again
-                        OneSignal.isPushNotificationsEnabled(function(isSubscribed) {
-                            updatePushNotificationUI(isSubscribed);
-                        });
-                    });
-                });
-            }
-
-            // Listen for subscription changes (e.g., user enables notifications via browser prompt)
-            OneSignal.on('subscriptionChange', function (isSubscribed) {
-                console.log("OneSignal Subscription changed:", isSubscribed);
-                updatePushNotificationUI(isSubscribed);
-                if (isSubscribed) {
-                    OneSignal.getUserId(function(userId) {
-                        console.log("OneSignal Player ID:", userId);
-                        // TODO: Send this userId to your Flask backend if you need to store it
-                        // This is where you would make an AJAX call to save the player ID
-                        // For example, if you implement the /api/register-onesignal-id endpoint:
-                        /*
-                        fetch('/api/register-onesignal-id', {
-                            method: 'POST',
-                            headers: {
-                                'Content-Type': 'application/json'
-                            },
-                            body: JSON.stringify({ player_id: userId })
-                        })
-                        .then(response => response.json())
-                        .then(data => {
-                            if (data.status === 'success') {
-                                console.log('OneSignal Player ID saved to backend.');
-                            } else {
-                                console.error('Failed to save OneSignal Player ID:', data.message);
-                            }
-                        })
-                        .catch(error => console.error('Error sending OneSignal Player ID:', error));
-                        */
-                    });
-                }
-            });
-        });
+            checkForNewAnnouncements();
+            setInterval(checkForNewAnnouncements, 10000);
+        </script>
+        {% endif %}
     </script>
-    {# Any scripts from child templates will be appended here via {{ super() }} if they also define a 'scripts' block #}
-    {% endblock %}
 </body>
 </html>
