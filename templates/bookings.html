@@ -71,7 +71,14 @@
                                 <td>{{ booking.party_size }}</td>
                                 <td>{{ booking.contact_info if booking.contact_info else 'N/A' }}</td>
                                 <td><small>{{ booking.notes if booking.notes else 'N/A' }}</small></td>
-                                <td><span class="badge bg-success">{{ booking.status }}</span></td>
+                                <td>
+                                    {% if booking.status=='Confirmed' %}
+                                        <span class="badge bg-success">{{ booking.status }}</span></td>
+                                    {% elif booking.status=='Pending' %}
+                                        <span class="badge bg-warning">{{ booking.status }}</span></td>
+                                    {% else %}
+                                        <span class="badge bg-danger">{{ booking.status }}</span></td>
+                                    {% endif%}
                                 <td>
                                     <a href="{{ url_for('edit_booking', booking_id=booking.id) }}" class="btn btn-sm btn-outline-secondary me-2">Edit</a>
                                     <form action="{{ url_for('delete_booking', booking_id=booking.id) }}" method="post" class="d-inline">

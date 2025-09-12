@@ -125,21 +125,24 @@
 
     {# BARTENDER / WAITER / SKULLER VIEW (if not suspended) #}
     {% elif not current_user.is_suspended %}
-        <div class="col-lg-7">
-            <div class="card shadow-sm h-100">
-                <div class="card-header card-header-custom"><i class="fas fa-clipboard-check me-2"></i>Your Daily Tasks</div>
-                <div class="card-body d-flex flex-column" id="locationStatusesContainer">
-                    {# Content will be loaded by JavaScript #}
-                    <p class="text-muted">Loading your daily tasks...</p>
+        {% if current_user.has_role('bartender')%}
+            <div class="col-lg-7">
+                <div class="card shadow-sm h-100">
+                    <div class="card-header card-header-custom"><i class="fas fa-clipboard-check me-2"></i>Your Daily Tasks</div>
+                    <div class="card-body d-flex flex-column" id="locationStatusesContainer">
+                        {# Content will be loaded by JavaScript #}
+                        <p class="text-muted">Loading your daily tasks...</p>
+                    </div>
                 </div>
             </div>
-        </div>
+        {% endif %}
         <div class="col-lg-5">
             <div class="card shadow-sm h-100" id="latestAnnouncementContainer">
                 {# Content will be loaded by JavaScript #}
                 <p class="text-center text-muted">Loading latest announcement...</p>
             </div>
         </div>
+
     {% endif %}
 </div>
 

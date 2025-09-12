@@ -39,6 +39,7 @@
                             <div class="col-12">
                                 <label for="status" class="form-label">Status</label>
                                 <select id="status" name="status" class="form-select">
+                                    <option value="Pending" {% if booking.status == 'Pending' %}selected{% endif %}>Pending</option>
                                     <option value="Confirmed" {% if booking.status == 'Confirmed' %}selected{% endif %}>Confirmed</option>
                                     <option value="Cancelled" {% if booking.status == 'Cancelled' %}selected{% endif %}>Cancelled</option>
                                     <option value="Completed" {% if booking.status == 'Completed' %}selected{% endif %}>Completed</option>

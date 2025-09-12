@@ -12,12 +12,13 @@ class Config:
         'https://www.googleapis.com/auth/drive.file',
         'https://www.googleapis.com/auth/spreadsheets'
     ]
-    GOOGLE_DRIVE_FOLDER_ID = '1klxw1pnKmAywmh3ayn9O77RpcDPZe-fb'  # Your main folder ID
+    GOOGLE_DRIVE_FOLDER_ID = '1EnwIxXKzPdVuVMqFgHMO5HwvgC67DtWO'  # Your main folder ID
 
     # Replace these with actual folder IDs from your Google Drive:
-    GOOGLE_DRIVE_LEAVE_DOCS_FOLDER_ID = '1V3XV2fWQjHE710DqMKXh1bc8qGGrlgyB'
+    GOOGLE_DRIVE_LEAVE_DOCS_FOLDER_ID = '1HX6p2JL0VT01X8oaWYki71p9bk472PcP'
     GOOGLE_DRIVE_EOD_IMAGES_FOLDER_ID = '1iRyvDglSJ6hgTIRE9XAp_0hy4rUX-lpH'
-    GOOGLE_DRIVE_EOD_SHEET_FOLDER_ID = '1udZ-tksPhs04gsxZs3bRhfP_xDInCtxO'
+    GOOGLE_DRIVE_EOD_SHEET_FOLDER_ID = '1P6NjtM_FEU2f795JqlTZSZcPuFyo-Pju'
+    GOOGLE_DRIVE_SUSPESION_DOCS_FOLDER_ID = '1kPieFFWyMh1f_aYpUEMP7JoeFowAA_qH'
 
     GOOGLE_OAUTH_REDIRECT_URI = os.environ.get('GOOGLE_OAUTH_REDIRECT_URI') or 'https://abbadon1903.pythonanywhere.com/google/callback'
 
@@ -27,14 +28,15 @@ class Config:
     MAIL_USE_TLS = True
     MAIL_USERNAME = os.environ.get('EMAIL_USER') or 'valkyriethread@gmail.com'
     MAIL_PASSWORD = os.environ.get('EMAIL_PASS') or 'xcyw xnkv gadd srpp'
-    MAIL_DEFAULT_SENDER = ('Inventory App', MAIL_USERNAME)
+    MAIL_DEFAULT_SENDER = ('The Goat Portal - Closing Report', MAIL_USERNAME)
 
-    EOD_REPORT_SHEET_ID = '1u4JCET3_Cu8c1NKaDJy05VvFxoFRzXBOtDcDOFBczfo'
+    EOD_REPORT_SHEET_ID = '1KRlXPOVpad_gRpUcc3KIc-2-Kv14OSEyBS-OSNKsdZ4'
 
     # EOD Report Recipients (Dummy Emails)
     EOD_REPORT_RECIPIENTS = [
         'tristandutoit311@gmail.com'
-       ## 'dummy_email2@example.com',
-       ## 'dummy_email3@example.com',
-       ## 'dummy_email4@example.com'
+        'henno@thefndry.co.za',
+        'matthew.liebenberg@gmail.com',
+
+        'anja.goat@gmail.com'
     ]

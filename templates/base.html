@@ -73,42 +73,41 @@
                             <ul class="dropdown-menu" aria-labelledby="myHubDropdown">
                                 <li><h6 class="dropdown-header">Personal Schedules & Availability</h6></li>
                                 <li><a class="dropdown-item" href="{{ url_for('my_schedule', view='personal') }}">View My Shifts</a></li>
-                                
+
                                 {# Submit Availability is available to most staff/managers #}
                                 {% if current_user.has_role('bartender') or current_user.has_role('waiter') or current_user.has_role('skullers') or current_user.has_role('manager') or current_user.has_role('general_manager') or current_user.has_role('system_admin') %}
                                     <li><a class="dropdown-item" href="{{ url_for('submit_shifts') }}">Submit Availability</a></li>
                                 {% endif %}
-                                
+
                                 {# Leave Requests is available to all non-scheduler roles, plus admins/GMs/owners #}
                                 {% if not current_user.has_role('scheduler') or current_user.has_role('system_admin') or current_user.has_role('general_manager') or current_user.has_role('owners') %}
                                     <li><a class="dropdown-item" href="{{ url_for('leave_requests') }}">Leave Requests</a></li>
                                 {% endif %}
 
                                 {# Consolidated Schedules and Shift Management are primarily for managers/schedulers/admins #}
-                                {% if current_user.has_role('manager') or current_user.has_role('general_manager') or current_user.has_role('scheduler') or current_user.has_role('system_admin') %}
                                     <li><hr class="dropdown-divider"></li>
                                     <li><h6 class="dropdown-header">Consolidated Schedules</h6></li>
-                                    
+
                                     {# BOH Schedule for bartenders/skullers and managers overseeing them #}
                                     {% if current_user.has_role('bartender') or current_user.has_role('skullers') or current_user.has_role('manager') or current_user.has_role('general_manager') or current_user.has_role('scheduler') or current_user.has_role('system_admin') %}
                                         <li><a class="dropdown-item" href="{{ url_for('my_schedule', view='boh') }}">Back of House (BOH)</a></li>
                                     {% endif %}
-                                    
+
                                     {# FOH Schedule for waiters and managers overseeing them #}
                                     {% if current_user.has_role('waiter') or current_user.has_role('manager') or current_user.has_role('general_manager') or current_user.has_role('scheduler') or current_user.has_role('system_admin') %}
                                         <li><a class="dropdown-item" href="{{ url_for('my_schedule', view='foh') }}">Front of House (FOH)</a></li>
                                     {% endif %}
-                                    
+
                                     <li><a class="dropdown-item" href="{{ url_for('my_schedule', view='managers') }}">Managers</a></li>
-                                    
+
                                     <li><hr class="dropdown-divider"></li>
                                     <li><h6 class="dropdown-header">Shift Management</h6></li>
-                                    
+
                                     {% if current_user.has_role('manager') or current_user.has_role('general_manager') or current_user.has_role('system_admin') %}
                                         <li><a class="dropdown-item" href="{{ url_for('manage_swaps') }}">Manage Swaps</a></li>
                                         <li><a class="dropdown-item" href="{{ url_for('manage_volunteered_shifts') }}">Manage Volunteered Shifts</a></li>
                                     {% endif %}
-                                {% endif %}
+
                             </ul>
                         </li>
                         {% endif %}
@@ -121,11 +120,11 @@
                             <a class="nav-link dropdown-toggle" href="#" id="inventoryDropdown" role="button" data-bs-toggle="dropdown" aria-expanded="false">Inventory</a>
                             <ul class="dropdown-menu" aria-labelledby="inventoryDropdown">
                                 <li><h6 class="dropdown-header">Daily Operations</h6></li>
-                                
+
                                 {% if current_user.has_role('system_admin') or current_user.has_role('manager') or current_user.has_role('bartender') %}
                                     <li><a class="dropdown-item" href="{{ url_for('recipes') }}">Recipe Book</a></li>
                                 {% endif %}
-                                
+
                                 {% if current_user.has_role('bartender') or current_user.has_role('manager') or current_user.has_role('general_manager') or current_user.has_role('system_admin') %}
                                     <li><hr class="dropdown-divider"></li>
                                     <li><h6 class="dropdown-header">Counts</h6></li>
@@ -134,10 +133,10 @@
                                     {% else %}
                                         <li><a class="dropdown-item disabled" href="#">No locations defined</a></li>
                                     {% endfor %}
-                                    
+
                                     <li><hr class="dropdown-divider"></li>
                                     <li><h6 class="dropdown-header">Sales & Stock</h6></li>
-                                    <li><a class="dropdown-item" href="{{ url_for('beginning_of_day') }}">Submit Sales (BOD)</a></li>                                    
+                                    <li><a class="dropdown-item" href="{{ url_for('beginning_of_day') }}">Submit Sales (BOD)</a></li>
                                     <li><a class="dropdown-item" href="{{ url_for('eod_report') }}">Submit Closing Report</a></li>
                                     <li><a class="dropdown-item" href="{{ url_for('deliveries') }}">Manage Deliveries</a></li>
                                 {% endif %}
@@ -169,9 +168,9 @@
                                     <li><h6 class="dropdown-header">Scheduling Tools</h6></li>
                                     <li><a class="dropdown-item" href="{{ url_for('scheduler') }}">Scheduler Tool</a></li>
                                     {# Linking to Bartender minimums as a common default entry point #}
-                                    <li><a class="dropdown-item" href="{{ url_for('manage_required_staff', role_name='bartender') }}">Manage Staff Minimums</a></li> 
+                                    <li><a class="dropdown-item" href="{{ url_for('manage_required_staff', role_name='bartender') }}">Manage Staff Minimums</a></li>
                                 {% endif %}
-                                
+
                                 {# User Management for managers/GMs/Admins #}
                                 {% if current_user.has_role('manager') or current_user.has_role('general_manager') or current_user.has_role('system_admin') %}
                                     <li><hr class="dropdown-divider"></li>
@@ -180,16 +179,16 @@
                                     <li><a class="dropdown-item" href="{{ url_for('active_users') }}">Active Users</a></li>
                                     <li><a class="dropdown-item" href="{{ url_for('manage_warnings') }}">Manage Warnings</a></li>
                                 {% endif %}
-                                
+
                                 {# System Setup for GMs/Admins #}
                                 {% if current_user.has_role('general_manager') or current_user.has_role('system_admin') %}
                                     <li><hr class="dropdown-divider"></li>
                                     <li><h6 class="dropdown-header">System Setup</h6></li>
                                     <li><a class="dropdown-item" href="{{ url_for('manage_locations') }}">Manage Locations</a></li>
                                 {% endif %}
-                                
+
                                 {# Business Tools for Owners/Admins #}
-                                {% if current_user.has_role('owners') or current_user.has_role('system_admin') %}
+                                {% if current_user.has_role('owners') or current_user.has_role('system_admin') or current_user.has_role('hostess') %}
                                     <li><hr class="dropdown-divider"></li>
                                     <li><h6 class="dropdown-header">Business Tools</h6></li>
                                     <li><a class="dropdown-item" href="{{ url_for('bookings') }}">Manage Bookings</a></li>
@@ -197,7 +196,7 @@
                             </ul>
                         </li>
                         {% endif %}
-                        
+
                     {% endif %}
                 </ul>
                 <ul class="navbar-nav ms-auto align-items-center">
@@ -234,12 +233,12 @@
                                         {{ role.name.replace('_', ' ').title() }}{% if not loop.last %}, {% endif %}
                                     {% endfor %}
                                 </h6></li>
+                                {% if current_user.has_role('manager') or current_user.has_role('general_manager') or current_user.has_role('system_admin') or current_user.has_role('owners') %}
+                                    <li><a class="dropdown-item" href="https://drive.google.com/drive/folders/1EnwIxXKzPdVuVMqFgHMO5HwvgC67DtWO" target="_blank"><i class="fab fa-google-drive me-2"></i>Google Drive</a></li>
+                                    <li><hr class="dropdown-divider"></li>
+                                {% endif %}
                                 <li><a class="dropdown-item" href="{{ url_for('user_manual') }}"><i class="fas fa-book me-2"></i>User Manual</a></li>
                                 <li><a class="dropdown-item" href="{{ url_for('change_password') }}"><i class="fas fa-key me-2"></i>Change Password</a></li>
-                                {# NEW: Google Drive Link #}
-                                {% if current_user.has_role('manager') or current_user.has_role('general_manager') or current_user.has_role('system_admin') or current_user.has_role('owners') %}
-                                    <li><a class="dropdown-item" href="https://drive.google.com/drive/u/0/my-drive" target="_blank"><i class="fab fa-google-drive me-2"></i>Google Drive</a></li>
-                                {% endif %}
                                 <li><hr class="dropdown-divider"></li>
                                 <li><a class="dropdown-item text-danger" href="{{ url_for('logout') }}"><i class="fas fa-sign-out-alt me-2"></i>Logout</a></li>
                             </ul>
