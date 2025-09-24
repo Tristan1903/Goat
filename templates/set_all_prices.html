@@ -202,7 +202,7 @@ document.addEventListener('DOMContentLoaded', function() {
         let filteredProducts = allProductRowsData.filter(product => {
             const nameMatch = product.name.includes(searchTerm);
             const numberMatch = product.number.includes(searchTerm);
-            
+
             // Log product type for comparison
             console.log(`DEBUG (Filtering Product): Name: "${product.name}", Type: "${product.type}", SelectedType: "${selectedType}"`);
             const typeMatch = selectedType === 'all' || product.type === selectedType;
@@ -336,7 +336,7 @@ document.addEventListener('DOMContentLoaded', function() {
             let itemsHeaderRowFound = false;
             let costHeaderRowFound = false;
             let currentCsvRowIndex = 0;
-            
+
             let productColumnIndex = -1;
             let priceColumnIndex = -1;
             let itemNumberColumnIndex = -1;
@@ -394,12 +394,12 @@ document.addEventListener('DOMContentLoaded', function() {
                                 console.log(`DEBUG (Found "Cost/" header in row ${currentCsvRowIndex}, index ${priceColumnIndex})`);
                             }
                         }
-                        
+
                         itemNumberColumnIndex = 4;
 
                         if (itemsHeaderRowFound && costHeaderRowFound) {
                             headerSearchPhase = false;
-                            
+
                             const maxIndexNeeded = Math.max(productColumnIndex, priceColumnIndex, itemNumberColumnIndex);
                             if (productColumnIndex === -1 || priceColumnIndex === -1 || itemNumberColumnIndex === -1 ||
                                 cellValues.length <= maxIndexNeeded) {
@@ -477,7 +477,7 @@ document.addEventListener('DOMContentLoaded', function() {
                             matchedProduct = productsByName[productNameFromCsv]; // This is the 'product' object from allProductRowsData
                             console.log(`DEBUG (Match by Name - Fallback): "${productNameFromCsv}"`);
                         }
-                        
+
                         // MODIFIED: Access inputElement property directly on matchedProduct
                         if (matchedProduct && matchedProduct.inputElement) {
                             matchedProduct.inputElement.value = priceFromCsv.toFixed(2);

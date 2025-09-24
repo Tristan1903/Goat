@@ -36,12 +36,19 @@
                 </div>
                 {% endif %}
 
-                {% if view_type in ['boh', 'foh', 'bartenders', 'waiters', 'skullers', 'managers'] %}
-                <div class="form-check">
-                    <input class="form-check-input" type="checkbox" id="showManagerShiftsCheckbox" checked>
-                    <label class="form-check-label" for="showManagerShiftsCheckbox">Show Manager Shifts</label>
+                {# Container for the checkbox and "View Shifts for Today" button, aligned right and stacked #}
+                <div class="d-flex flex-column align-items-end ms-auto gap-2">
+                    {% if view_type in ['boh', 'foh', 'bartenders', 'waiters', 'skullers', 'managers'] %}
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" id="showManagerShiftsCheckbox" checked>
+                            <label class="form-check-label" for="showManagerShiftsCheckbox">Show Manager Shifts</label>
+                        </div>
+                    {% endif %}
+                    {# NEW BUTTON: View Shifts for Today #}
+                    <a href="{{ url_for('shifts_today') }}" class="btn btn-info text-light">
+                        <i class="fas fa-calendar-day me-2"></i>View Shifts for Today
+                    </a>
                 </div>
-                {% endif %}
             </div>
 
             {# NEW: Collapsible Shift Time Rules for the relevant role (and the new View Rules button) #}
@@ -141,15 +148,18 @@
                                     <tr class="manager-row"> 
                                         <td class="fw-bold">{{ user.full_name }}</td>
                                         {% for day in ns.dates %}
-                                            <td>
+                                            <td class="position-relative">
                                                 {% set shifts = schedule_by_user.get(user.id, {}).get(day, []) %}
-                                                {% if shifts %}
-                                                    {% for shift in shifts %}
-                                                        {{ render_shift_with_time(shift, user) }}<br>
-                                                    {% endfor %}
-                                                {% else %}
-                                                    <span class="text-muted">OFF</span>
-                                                {% endif %}
+                                                <div class="shift-glow-container 
+                                                            {% if shifts %}has-assigned-shift-glow{% else %}no-assigned-shift-glow{% endif %}">
+                                                    {% if shifts %}
+                                                        {% for shift in shifts %}
+                                                            {{ render_shift_with_time(shift, user) }}<br>
+                                                        {% endfor %}
+                                                    {% else %}
+                                                        <span class="text-muted">OFF</span>
+                                                    {% endif %}
+                                                </div>
                                             </td>
                                         {% endfor %}
                                     </tr>
@@ -176,15 +186,18 @@
                                     <tr>
                                         <td class="fw-bold">{{ user.full_name }}</td>
                                         {% for day in ns.dates %}
-                                            <td>
+                                            <td class="position-relative">
                                                 {% set shifts = schedule_by_user.get(user.id, {}).get(day, []) %}
-                                                {% if shifts %}
-                                                    {% for shift in shifts %}
-                                                        {{ render_shift_with_time(shift, user) }}<br>
-                                                    {% endfor %}
-                                                {% else %}
-                                                    <span class="text-muted">OFF</span>
-                                                {% endif %}
+                                                <div class="shift-glow-container 
+                                                            {% if shifts %}has-assigned-shift-glow{% else %}no-assigned-shift-glow{% endif %}">
+                                                    {% if shifts %}
+                                                        {% for shift in shifts %}
+                                                            {{ render_shift_with_time(shift, user) }}<br>
+                                                        {% endfor %}
+                                                    {% else %}
+                                                        <span class="text-muted">OFF</span>
+                                                    {% endif %}
+                                                </div>
                                             </td>
                                         {% endfor %}
                                     </tr>
@@ -209,15 +222,18 @@
                                     <tr>
                                         <td class="fw-bold">{{ user.full_name }}</td>
                                         {% for day in ns.dates %}
-                                            <td>
+                                            <td class="position-relative">
                                                 {% set shifts = schedule_by_user.get(user.id, {}).get(day, []) %}
-                                                {% if shifts %}
-                                                    {% for shift in shifts %}
-                                                        {{ render_shift_with_time(shift, user) }}<br>
-                                                    {% endfor %}
-                                                {% else %}
-                                                    <span class="text-muted">OFF</span>
-                                                {% endif %}
+                                                <div class="shift-glow-container 
+                                                            {% if shifts %}has-assigned-shift-glow{% else %}no-assigned-shift-glow{% endif %}">
+                                                    {% if shifts %}
+                                                        {% for shift in shifts %}
+                                                            {{ render_shift_with_time(shift, user) }}<br>
+                                                        {% endfor %}
+                                                    {% else %}
+                                                        <span class="text-muted">OFF</span>
+                                                    {% endif %}
+                                                </div>
                                             </td>
                                         {% endfor %}
                                     </tr>
@@ -247,15 +263,18 @@
                                     <tr>
                                         <td class="fw-bold">{{ user.full_name }}</td>
                                         {% for day in ns.dates %}
-                                            <td>
+                                            <td class="position-relative">
                                                 {% set shifts = schedule_by_user.get(user.id, {}).get(day, []) %}
-                                                {% if shifts %}
-                                                    {% for shift in shifts %}
-                                                        {{ render_shift_with_time(shift, user) }}<br>
-                                                    {% endfor %}
-                                                {% else %}
-                                                    <span class="text-muted">OFF</span>
-                                                {% endif %}
+                                                <div class="shift-glow-container 
+                                                            {% if shifts %}has-assigned-shift-glow{% else %}no-assigned-shift-glow{% endif %}">
+                                                    {% if shifts %}
+                                                        {% for shift in shifts %}
+                                                            {{ render_shift_with_time(shift, user) }}<br>
+                                                        {% endfor %}
+                                                    {% else %}
+                                                        <span class="text-muted">OFF</span>
+                                                    {% endif %}
+                                                </div>
                                             </td>
                                         {% endfor %}
                                     </tr>
@@ -282,15 +301,18 @@
                             <tr>
                                 <td><strong>Shifts</strong></td>
                                 {% for day in ns.dates %}
-                                    <td>
-                                        {% set shifts = schedule_by_day.get(day, []) if schedule_by_day is defined else [] %}
-                                        {% if shifts %}
-                                            {% for shift in shifts %}
-                                                {{ render_shift_with_time(shift, current_user) }}<br>
-                                            {% endfor %}
-                                        {% else %}
-                                            <span class="text-muted">OFF</span>
-                                        {% endif %}
+                                    <td class="position-relative"> {# Added position-relative to TD #}
+                                        <div class="shift-glow-container 
+                                                    {% if schedule_by_day.get(day, []) %}has-assigned-shift-glow{% else %}no-assigned-shift-glow{% endif %}">
+                                            {% set shifts = schedule_by_day.get(day, []) if schedule_by_day is defined else [] %}
+                                            {% if shifts %}
+                                                {% for shift in shifts %}
+                                                    {{ render_shift_with_time(shift, current_user) }}<br>
+                                                {% endfor %}
+                                            {% else %}
+                                                <span class="text-muted">OFF</span>
+                                            {% endif %}
+                                        </div>
                                     </td>
                                 {% endfor %}
                             </tbody>
@@ -462,7 +484,7 @@ document.addEventListener('DOMContentLoaded', function () {
             const shiftsOnDay = personalScheduleData[dayStr] || [];
             shiftsOnDay.forEach(shift => {
                 const isPendingSwap = Array.isArray(shift.swap_requests) && shift.swap_requests.some(req => req && req.status === 'Pending');
-                const isPendingRelinquished = shift.volunteered_cycle && (shift.volunteered_cycle.status === 'Open' || shift.volunteered_cycle.status === 'PendingApproval');
+                const isPendingRelinquished = shift.volunteered_cycle && (shift.volunteered_cycle.status === 'Open' || shift.volunteered_cycle.status == 'PendingApproval');
 
                 let shouldAdd = true;
                 if (!includePendingSwaps && isPendingSwap) {

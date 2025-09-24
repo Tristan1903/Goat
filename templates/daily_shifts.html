@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+
+{% block title %}Today's Schedule ({{ today_date.strftime('%A, %b %d') }}){% endblock %}
+
+{% block content %}
+<div class="container mt-4">
+    <div class="card shadow-sm">
+        <div class="card-body p-4 p-md-5">
+            <h2 class="card-title mb-4">Shifts for Today: {{ today_date.strftime('%A, %b %d, %Y') }}</h2>
+
+            {# Back button to my_schedule #}
+            <div class="mb-4">
+                <a href="{{ url_for('my_schedule') }}" class="btn btn-secondary">
+                    <i class="fas fa-arrow-left me-2"></i> Back to My Schedule
+                </a>
+            </div>
+
+            {% if shifts_by_role_categorized %}
+                {% for role_category_name in sorted_role_categories %}
+                    {% if shifts_by_role_categorized[role_category_name] is defined and shifts_by_role_categorized[role_category_name] %}
+                        <h4 class="mt-4 mb-3">{{ role_category_name }}</h4>
+                        <ul class="list-group mb-4">
+                            {% for shift in shifts_by_role_categorized[role_category_name] %}
+                                <li class="list-group-item">
+                                    <span class="fw-bold">{{ shift.user_name }}</span> ({{ shift.roles }}) - 
+                                    {{ shift.assigned_shift }} <small class="text-muted">{% if shift.time_display and shift.time_display != 'N/A' %}{{ shift.time_display }}{% else %}No time specified{% endif %}</small>
+                                
+                                    {# Existing swap/volunteer status from the route if needed, currently not passed directly to this template #}
+                                    {# If you need these, you'd need to extend the shifts_data in the app.py route #}
+                                </li>
+                            {% endfor %}
+                        </ul>
+                    {% endif %}
+                {% endfor %}
+
+            {% else %}
+                <p class="text-muted text-center">No shifts scheduled for today.</p>
+            {% endif %}
+
+        </div>
+    </div>
+</div>
+{% endblock %}

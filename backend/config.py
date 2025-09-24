@@ -5,6 +5,9 @@ class Config:
     SQLALCHEMY_DATABASE_URI = os.environ.get('DATABASE_URL') or 'sqlite:///site.db'
     SQLALCHEMY_TRACK_MODIFICATIONS = False
 
+    # JWT Configuration
+    JWT_SECRET_KEY = os.environ.get('JWT_SECRET_KEY') or 'your_jwt_secret_key_change_me'
+
     # Google Drive Configuration
     GOOGLE_DRIVE_CREDENTIALS_FILE = 'credentials.json'
     GOOGLE_DRIVE_TOKEN_FILE = 'token.json'
@@ -34,9 +37,16 @@ class Config:
 
     # EOD Report Recipients (Dummy Emails)
     EOD_REPORT_RECIPIENTS = [
-        'tristandutoit311@gmail.com'
+        'tristandutoit311@gmail.com',
         'henno@thefndry.co.za',
         'matthew.liebenberg@gmail.com',
-
         'anja.goat@gmail.com'
     ]
+
+    COMPLAINT_FEEDBACK_RECIPIENTS = [
+        'henno@thefndry.co.za'
+    ]
+
+    FIREBASE_SERVICE_ACCOUNT_KEY = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'firebase_service_account.json')
+
+    FLASK_WEB_BASE_URL = os.environ.get('FLASK_WEB_BASE_URL') or 'https://abbadon1903.pythonanywhere.com'

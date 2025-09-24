@@ -2,18 +2,16 @@
 # Imports
 # ==============================================================================
 
-import io
-import csv
 import os
 import json
 import re
 from datetime import date, datetime, timedelta, time
 from functools import wraps
 from werkzeug.utils import secure_filename
-
+from werkzeug.routing import BaseConverter
 from flask import (Flask, render_template, request, redirect, url_for,
-                   flash, Response, jsonify, get_flashed_messages, send_from_directory, session)
-from flask_sqlalchemy import SQLAlchemy
+                   flash, Response, jsonify, get_flashed_messages, send_from_directory, session, current_app)
+                    
 from flask_bcrypt import Bcrypt
 from flask_login import (LoginManager, UserMixin, login_user, logout_user,
                        current_user, login_required)
@@ -21,34 +19,156 @@ from sqlalchemy import distinct, func, or_
 
 from flask_mail import Mail, Message
 
-from google.oauth2.credentials import Credentials
-from google_auth_oauthlib.flow import Flow
-from google.auth.transport.requests import Request
-from googleapiclient.discovery import build
-from googleapiclient.errors import HttpError
-from googleapiclient.http import MediaIoBaseUpload
+from flask_cors import CORS
 
-from config import Config
+from .config import Config
+
+from .models import (db, Warning, EndOfDayReport, EndOfDayReportImage, RecountRequest, Booking, VarianceExplanation, Delivery, CocktailsSold,
+RequiredStaff, Role, User, Location, Product, Announcement, Count, BeginningOfDay, Sale, ActivityLog, Recipe, RecipeIngredient, ShiftSubmission,
+Schedule, ShiftSwapRequest, LeaveRequest, VolunteeredShift)
+
+from .api.mobile import mobile_api_bp
+
+from flask_jwt_extended import JWTManager
+
+from .utils import (get_drive_service, upload_file_to_drive, append_eod_data_to_google_sheet,
+                 send_push_notification,
+                 SCHEDULER_SHIFT_TYPES_GENERIC, ROLE_SHIFT_DEFINITIONS,
+                 get_role_specific_shift_types, get_shift_time_display,
+                 _build_week_dates,
+                 MANUAL_CONTENT)
+
+import firebase_admin # <--- NEW IMPORT
+from firebase_admin import credentials, messaging
 
 # ==============================================================================
 # App Configuration
 # ==============================================================================
 
-app = Flask(__name__)
+basedir = os.path.abspath(os.path.dirname(__file__))
 
+project_root = os.path.join(basedir, os.pardir)
+
+app = Flask(
+    __name__,
+    template_folder=os.path.join(project_root, 'templates'),
+    static_folder=os.path.join(project_root, 'static'),
+    instance_path=os.path.join(project_root, 'instance')
+)
 app.config.from_object(Config)
 
-db = SQLAlchemy(app)
-bcrypt = Bcrypt(app)
+CORS(app)
+
+if not firebase_admin._apps: # Check if app is already initialized to prevent re-initialization
+    try:
+        cred = credentials.Certificate(app.config['FIREBASE_SERVICE_ACCOUNT_KEY'])
+        firebase_admin.initialize_app(cred)
+        app.logger.info("Firebase Admin SDK initialized.")
+    except Exception as e:
+        app.logger.error(f"Failed to initialize Firebase Admin SDK: {e}", exc_info=True)
+
+# Initialize extensions
+db.init_app(app)
+
+bcrypt_obj = Bcrypt(app)
+
+app.extensions['flask_bcrypt'] = bcrypt_obj
+bcrypt = bcrypt_obj
+
 login_manager = LoginManager(app)
 login_manager.login_view = 'login'
 login_manager.login_message_category = 'info'
 
 mail = Mail(app)
 
+jwt = JWTManager(app)
+
+with app.app_context():
+    from .api import mobile
+
+app.register_blueprint(mobile_api_bp)
+
 # ==============================================================================
 # Global Definitions (UPDATED/NEW)
 # ==============================================================================
+
+class OptionalIntConverter(BaseConverter):
+    """
+    Custom URL converter to make an integer path segment optional.
+    Matches either /<int_value> or nothing.
+    Default value in to_python is 0 when no value is provided in the URL.
+    """
+    regex = r'(?:/(?P<int_val>\d+))?' # Matches /123 or nothing (empty string after first /)
+
+    def to_python(self, value):
+        # Check for None or empty string first, indicating the segment was not present.
+        if value is None or value == '':
+            return 0  # Default value for week_offset when not in URL
+
+        # If 'value' is not empty, it means the regex matched something like '/123'.
+        # We need to re-match the regex against the received 'value' to extract
+        # the content of the named group 'int_val'.
+        match = re.match(self.regex, value)
+        if match and match.group('int_val'):
+            return int(match.group('int_val'))
+        else:
+            # This case should ideally not be reached if 'value' is always a result
+            # of a successful match of 'self.regex'. However, it's good for robustness.
+            raise ValueError(f"OptionalIntConverter could not parse '{value}' into an integer.")
+
+    def to_url(self, value):
+        if value == 0:
+            return '' # Don't add to URL if value is default
+        return f'/{value}'
+
+app.url_map.converters['optional_int'] = OptionalIntConverter
+
+
+def send_complaint_feedback_email(feedback_data, recipient_emails, personal_email_copy=None):
+    """
+    Sends an HTML formatted email of the complaint feedback.
+    """
+    try:
+        msg = Message("New Complaint/Feedback Submission",
+                      sender=app.config['MAIL_DEFAULT_SENDER'])
+
+        to_recipients = list(recipient_emails)
+        if personal_email_copy and personal_email_copy not in to_recipients:
+            to_recipients.append(personal_email_copy)
+        msg.recipients = to_recipients
+
+        # Determine sender name for display
+        sender_name_display = "Anonymous User" if feedback_data['is_anonymous'] else feedback_data['submitter_name']
+
+        html_body = f"""
+        <html>
+        <head></head>
+        <body>
+            <h3>New Complaint/Feedback Submitted</h3>
+            <p><strong>Submitted By:</strong> {sender_name_display}</p>
+            <p><strong>Date Submitted:</strong> {feedback_data['submission_date'].strftime('%Y-%m-%d %H:%M:%S')}</p>
+            <hr>
+
+            <h4>Feedback Details</h4>
+            <ul>
+                <li><strong>Anonymous Submission:</strong> {'Yes' if feedback_data['is_anonymous'] else 'No'}</li>
+                <li><strong>Staff Member Position:</strong> {feedback_data['staff_position'] or 'N/A'}</li>
+                <li><strong>Date of Feedback:</strong> {feedback_data['feedback_date']}</li>
+                <li><strong>Feedback:</strong></li>
+                <p style="white-space: pre-wrap;">{feedback_data['feedback_text']}</p>
+            </ul>
+
+            <p>This feedback was submitted via the Goat and Co. Portal.</p>
+        </body>
+        </html>
+        """
+        msg.html = html_body
+        mail.send(msg)
+        app.logger.info(f"Complaint/Feedback email sent to {', '.join(msg.recipients)}")
+        return True
+    except Exception as e:
+        app.logger.error(f"Error sending complaint/feedback email: {e}", exc_info=True)
+        return False
 
 def slugify(s):
     if not isinstance(s, str):
@@ -118,381 +238,18 @@ def get_products_data(group_by=None, sort_by=None, sort_order='asc', type_filter
     return grouped_products
 
 
-# Generic list of all possible shift types that can be assigned by a scheduler
-SCHEDULER_SHIFT_TYPES_GENERIC = ['Open', 'Day', 'Night', 'Double A', 'Double B', 'Split Double']
-
-# Detailed shift definitions by role and day of the week
-ROLE_SHIFT_DEFINITIONS = {
-    'bartender': {
-        'Tuesday': {
-            'Open': {'start': '08:00', 'end': '16:00'},
-            'Day': {'start': '10:00', 'end': '16:00'},
-            'Night': {'start': '16:00', 'end': 'Close'},
-            'Double A': {'start': '08:00', 'end': 'Specified by Scheduler'}, # Changed
-            'Double B': {'start': '10:00', 'end': 'Specified by Scheduler'}, # Changed
-            'Split Double': {'start': 'Specified by Scheduler', 'end': 'Specified by Scheduler'},
-        },
-        'Wednesday': { # Same as Tuesday
-            'Open': {'start': '08:00', 'end': '16:00'},
-            'Day': {'start': '10:00', 'end': '16:00'},
-            'Night': {'start': '16:00', 'end': 'Close'},
-            'Double A': {'start': '08:00', 'end': 'Specified by Scheduler'},
-            'Double B': {'start': '10:00', 'end': 'Specified by Scheduler'},
-            'Split Double': {'start': 'Specified by Scheduler', 'end': 'Specified by Scheduler'},
-        },
-        'Thursday': { # Same as Tuesday
-            'Open': {'start': '08:00', 'end': '16:00'},
-            'Day': {'start': '10:00', 'end': '16:00'},
-            'Night': {'start': '16:00', 'end': 'Close'},
-            'Double A': {'start': '08:00', 'end': 'Specified by Scheduler'},
-            'Double B': {'start': '10:00', 'end': 'Specified by Scheduler'},
-            'Split Double': {'start': 'Specified by Scheduler', 'end': 'Specified by Scheduler'},
-        },
-        'Friday': {
-            'Open': {'start': '08:00', 'end': '17:00'},
-            'Day': {'start': '10:00', 'end': '17:00'},
-            'Night': {'start': '15:00', 'end': 'Close'},
-            'Double A': {'start': '08:00', 'end': 'Specified by Scheduler'},
-            'Double B': {'start': '10:00', 'end': 'Specified by Scheduler'},
-            'Split Double': {'start': 'Specified by Scheduler', 'end': 'Specified by Scheduler'},
-        },
-        'Saturday': { # Same as Friday
-            'Open': {'start': '08:00', 'end': '17:00'},
-            'Day': {'start': '10:00', 'end': '17:00'},
-            'Night': {'start': '15:00', 'end': 'Close'},
-            'Double A': {'start': '08:00', 'end': 'Specified by Scheduler'},
-            'Double B': {'start': '10:00', 'end': 'Specified by Scheduler'},
-            'Split Double': {'start': 'Specified by Scheduler', 'end': 'Specified by Scheduler'},
-        },
-        'Sunday': {
-            'Open': {'start': '08:00', 'end': '15:00'},
-            'Day': {'start': '10:00', 'end': '17:00'},
-            'Night': {'start': '15:00', 'end': 'Close'},
-            'Double A': {'start': '08:00', 'end': 'Specified by Scheduler'},
-            'Double B': {'start': '10:00', 'end': 'Specified by Scheduler'},
-            'Split Double': {'start': 'Specified by Scheduler', 'end': 'Specified by Scheduler'},
-        }
-    },
-    'waiter': {
-        'Tuesday': {
-            # 'Open': {'start': 'N/A', 'end': 'N/A'}, # No Open shift
-            'Day': {'start': '09:45', 'end': '16:00'},
-            'Night': {'start': '16:00', 'end': 'Close'},
-            'Double': {'start': '09:45', 'end': 'Close'},
-            # 'Split Double': {'start': 'N/A', 'end': 'N/A'}, # No Split Double
-        },
-        'Wednesday': { # Same as Tuesday
-            'Day': {'start': '09:45', 'end': '16:00'},
-            'Night': {'start': '16:00', 'end': 'Close'},
-            'Double': {'start': '09:45', 'end': 'Close'},
-        },
-        'Thursday': { # Same as Tuesday
-            'Day': {'start': '09:45', 'end': '16:00'},
-            'Night': {'start': '16:00', 'end': 'Close'},
-            'Double': {'start': '09:45', 'end': 'Close'},
-        },
-        'Friday': { # Same as Tuesday
-            'Day': {'start': '09:45', 'end': '16:00'},
-            'Night': {'start': '16:00', 'end': 'Close'},
-            'Double': {'start': '09:45', 'end': 'Close'},
-        },
-        'Saturday': { # Same as Tuesday
-            'Day': {'start': '09:45', 'end': '16:00'},
-            'Night': {'start': '16:00', 'end': 'Close'},
-            'Double': {'start': '09:45', 'end': 'Close'},
-        },
-        'Sunday': {
-            'Day': {'start': '10:00', 'end': '16:00'},
-            'Night': {'start': '16:00', 'end': 'Close'},
-            'Double': {'start': '10:00', 'end': 'Close'},
-        }
-    },
-    # Default definitions for other roles if not explicitly specified.
-    'skullers': {
-        'default': { # Apply these for all days not explicitly defined
-            'Open': {'start': 'Flexible', 'end': 'Flexible'},
-            'Day': {'start': '09:00', 'end': '17:00'},
-            'Night': {'start': '17:00', 'end': 'Close'},
-            'Double': {'start': '09:00', 'end': 'Close'},
-            'Split Double': {'start': 'Specified by Scheduler', 'end': 'Specified by Scheduler'},
-        }
-    },
-    'manager': { # Managers and General Managers share rules
-        'default': {
-            'Split Double': {'start': 'Specified by Scheduler', 'end': 'Specified by Scheduler'},
-        }
-    }
-}
-
-def get_role_specific_shift_types(role_name, day_name):
-    """
-    Returns a list of shift types relevant for a given role and day,
-    based on ROLE_SHIFT_DEFINITIONS.
-    """
-    role_def = ROLE_SHIFT_DEFINITIONS.get(role_name)
-    if not role_def:
-        # Fallback for roles without explicit definitions, e.g., 'system_admin' to 'manager'
-        role_def = ROLE_SHIFT_DEFINITIONS.get('manager')
-        if not role_def: # Fallback if even 'manager' default is missing (shouldn't happen)
-            return SCHEDULER_SHIFT_TYPES_GENERIC
-
-    day_def = role_def.get(day_name)
-    if not day_def and 'default' in role_def:
-        day_def = role_def.get('default')
-        if not day_def: # Fallback if 'default' is also missing
-            return []
-
-    if day_def:
-        return list(day_def.keys())
-    return [] # No specific definition found, return empty list
+@login_manager.user_loader
+def load_user(user_id):
+    with app.app_context():
+        return db.session.get(User, int(user_id))
 
 
-def get_shift_time_display(role_name, day_name, shift_type, custom_start=None, custom_end=None):
-    """
-    Helper to retrieve formatted shift start/end times for display, with custom overrides.
-    Used by scheduler_role.html and my_schedule.html
-    """
-    # Override for custom-defined shifts (Split Double, Double A/B for bartender)
-    if custom_start and custom_end:
-        # If 'Close' was specified, display it correctly
-        end_display = "Close" if custom_end.lower() == "close" else custom_end
-        return f"({custom_start} - {end_display})"
-
-    # Fallback to predefined role/day specific times
-    role_def = ROLE_SHIFT_DEFINITIONS.get(role_name)
-    if not role_def:
-        role_def = ROLE_SHIFT_DEFINITIONS.get('manager') # Fallback for roles without explicit definitions
-
-    day_def = role_def.get(day_name)
-    if not day_def and 'default' in role_def:
-        day_def = role_def.get('default')
-
-    if day_def:
-        times = day_def.get(shift_type)
-        if times:
-            return f"({times['start']} - {times['end']})"
-    return "" # No specific definition found
-
-# ==============================================================================
-# User Manual Content
-# ==============================================================================
-MANUAL_CONTENT = {
-    "Getting Started": {
-        "content": """
-            <p>Welcome to the Inventory Management & Scheduling System. This manual will help you understand the features available based on your assigned roles.</p>
-            <strong>Logging In:</strong> Use the username and password provided by your administrator.
-            <br>
-            <strong>Changing Your Password:</strong> You can change your own password at any time by clicking your name in the top-right corner and selecting "Change Password".
-        """,
-        "roles": ["system_admin", "manager", "bartender", "waiter", "scheduler", "general_manager", "skullers", "owners"]
-    },
-    "Daily Workflow (Inventory)": {
-        "content": """
-            <p>The daily inventory process follows a strict order:</p>
-            <ol>
-                <li><strong>Beginning of Day:</strong> A Manager or Admin must first enter the starting counts for all products and the previous day's sales. This can be done manually or by uploading a sales CSV from the POS system. This step unlocks the daily counting pages for staff.</li>
-                <li><strong>Daily Counts:</strong> Perform counts for your assigned locations. You can do a "First Count" and then make "Corrections" later. Note: A user cannot correct their own first count; a different user must make the correction.</li>
-                <li><strong>Recount Requests:</strong> Managers can request a recount of a specific product or location from the Variance Report page. Relevant staff will be notified and asked to perform a new count.</li>
-                <li><strong>View Reports:</strong> The reporting suite allows managers to see a daily summary, compare first vs. correction counts, and view a product-by-product breakdown.</li>
-            </ol>
-        """,
-        "roles": ["system_admin", "manager", "bartender", "owner"]
-    },
-    "Scheduling for Staff": {
-        "content": """
-            <p>The scheduling system allows you to manage your work availability and view your assigned shifts.</p>
-            <ul>
-                <li><strong>Submit Shifts:</strong> Use the "Submit Shifts" page to mark your availability for the upcoming week. You can update your availability at any time until the schedule is published.</li>
-                <li><strong>My Schedule:</strong> Once a schedule is published by a Scheduler, you can view your assigned shifts for the week on the "My Schedule" page. Your shifts will be highlighted with their assigned times. New shift types like 'Open' (flexible slot) and 'Split Double' (specific split times) might appear based on manager assignments.</li>
-                <li><strong>Request Swap:</strong> If you need to swap an assigned shift, you can click the "Request Swap" button next to that shift on the "My Schedule" page. This will notify managers of your request.</li>
-                <li><strong>Relinquish Shift:</strong> If you need to give up a shift and let others volunteer, use the "Relinquish Shift" button on "My Schedule". This makes the shift available for other eligible staff to volunteer for.</li>
-            </ul>
-        """,
-        "roles": ["bartender", "waiter", "skullers"]
-    },
-    "Scheduling for Management": {
-        "content": """
-            <p>As a Scheduler, you are responsible for creating and publishing the weekly work schedule.</p>
-            <ol>
-                <li><strong>Review Availability:</strong> Go to the "Scheduler" page to see a grid of all staff availability for the upcoming week. A green badge indicates a user is available.</li>
-                <li><strong>Assign Shifts with Times:</strong> Assign staff to specific shift types like 'Open', 'Day', 'Night', 'Double', or 'Split Double' using the dropdowns. Hover over shift types or click 'View Rules' for their defined times. 'Open' shifts are flexible slots, 'Split Double' requires custom timing.</li>
-                <li><strong>Manage Staff Minimums:</strong> Set minimum and optional maximum staff requirements per role per day to guide scheduling and assess staffing levels.</li>
-                <li><strong>Save Draft:</strong> You can save your progress at any time by clicking "Save Draft". The schedule will not be visible to staff.</li>
-                <li><strong>Publish Schedule:</strong> When you are finished, click "Save and Publish Schedule". This will make the schedule visible to all staff and send out a notification. This action will replace any previously published schedule for that week.</li>
-                <li><strong>Export:</strong> You can download a CSV of the full schedule for a specific role at any time using the "Export to CSV" button on the scheduler page.</li>
-                <li><strong>Manage Swaps & Volunteered Shifts:</strong> Review and approve/deny requests for shift swaps and shifts put up for volunteering on their respective management pages.</li>
-            </ol>
-        """,
-        "roles": ["scheduler", "manager", "general_manager", "system_admin"]
-    },
-    "HR & Communication": {
-        "content": """
-            <p>The system includes tools for managing leave and communicating with the team.</p>
-            <ul>
-                <li><strong>Announcements:</strong> Managers can post announcements, categorizing them as General, Late Arrival, or Urgent. They can also target specific roles or include actionable links to schedules. All announcements can now be cleared by authorized users.</li>
-                <li><strong>Leave Requests:</strong> Use the "Leave" page to submit requests for time off. You can include dates, a reason, and an optional supporting document (like a doctor's note).</li>
-                <li><strong>Bookings:</strong> Log and manage customer bookings, including customer name, party size, date, time, and notes.</li>
-                <li><strong>Manage Swaps (Managers):</strong> Managers can review all pending shift swap requests on the "Manage Swaps" page. To approve a request, select a covering employee from the list and click "Approve". The schedule will be updated automatically.</li>
-                <li><strong>Manage Volunteered Shifts (Managers):</strong> Managers can review shifts that staff have relinquished for volunteering. They can then assign an eligible volunteer or cancel the volunteering cycle.</li>
-            </ul>
-        """,
-        "roles": ["system_admin", "manager", "general_manager", "bartender", "waiter", "skullers","owner","hostess"]
-    },
-    "Recipe Book": {
-        "content": """
-            <p>The "Recipe Book" is a central location for all cocktail recipes. Bartenders can view recipes, while Managers and Admins can add, edit, or delete them. Use the search bar to quickly find recipes by name.</p>
-        """,
-        "roles": ["system_admin", "manager", "bartender","owner"]
-    },
-    "Managing Users (Admins)": {
-        "content": """
-            <p>As a System Admin or General Manager, you have advanced user management capabilities.</p>
-            <ul>
-                <li><strong>Add & Edit Users:</strong> Use the "Manage Users" page to create new accounts or edit existing ones. You can now assign multiple roles to a single user using the checkboxes.</li>
-                <li><strong>Suspend Users:</strong> On the user edit page, you can temporarily suspend an account. A suspended user has limited access (they can only view their schedule and announcements). You can set an optional end date to have the suspension lifted automatically and upload/delete suspension documents.</li>
-                <li><strong>Reinstate Users:</strong> Suspended users can be reinstated from the "Manage Users" list.</li>
-                <li><strong>Active Users:</strong> The "Active Users" page shows who has been using the application in the last 5 minutes. From here, you can force a user to be logged out.</li>
-                <li><strong>Clear Activity Log:</strong> System Administrators can clear all past activity log entries from the Dashboard.</li>
-            </ul>
-        """,
-        "roles": ["system_admin", "general_manager"]
-    }
-}
 
 # ==============================================================================
 # Helper Functions & Decorators
 # ==============================================================================
 
 app.jinja_env.filters['slugify'] = slugify
-
-def get_drive_service():
-    """
-    Authenticates with Google Drive/Sheets using stored tokens and returns service objects.
-    Assumes initial authorization via /google/authorize and /google/callback has occurred.
-    Returns a dictionary of services: {'drive': drive_service, 'sheets': sheets_service}.
-    """
-    creds = None
-    if os.path.exists(app.config['GOOGLE_DRIVE_TOKEN_FILE']):
-        creds = Credentials.from_authorized_user_file(app.config['GOOGLE_DRIVE_TOKEN_FILE'], app.config['GOOGLE_DRIVE_SCOPES'])
-
-    if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-            # Save the refreshed credentials
-            with open(app.config['GOOGLE_DRIVE_TOKEN_FILE'], 'w') as token:
-                token.write(creds.to_json())
-        else:
-            app.logger.error("No valid Google Drive/Sheets credentials found. Please run initial authorization.")
-            raise Exception("Google Drive/Sheets not authorized. Please initiate authorization via /google/authorize.")
-
-    drive_service = build('drive', 'v3', credentials=creds)
-    sheets_service = build('sheets', 'v4', credentials=creds) # NEW: Build Sheets service
-    return {'drive': drive_service, 'sheets': sheets_service} # Return both services
-
-
-# MODIFIED: get_drive_service call in upload_file_to_drive
-
-def upload_file_to_drive(file_obj, filename, mimetype, parent_folder_id=None):
-    """
-    Uploads a file-like object to Google Drive.
-    Returns the webViewLink of the uploaded file on success, None otherwise.
-    If parent_folder_id is provided, the file will be uploaded to that folder.
-    Otherwise, it defaults to app.config['GOOGLE_DRIVE_FOLDER_ID'].
-    """
-    try:
-        services = get_drive_service()
-        service = services['drive']
-
-        file_metadata = {'name': filename}
-
-        target_folder_id = parent_folder_id if parent_folder_id else app.config['GOOGLE_DRIVE_FOLDER_ID']
-        if target_folder_id:
-            file_metadata['parents'] = [target_folder_id]
-        else:
-            app.logger.error("No target_folder_id provided for Google Drive upload.")
-            flash(f"Error uploading document: Google Drive target folder not specified.", 'danger')
-            return None # CRITICAL: Ensure a folder ID exists
-
-        media = MediaIoBaseUpload(file_obj, mimetype=mimetype, resumable=True)
-
-        file = service.files().create(
-            body=file_metadata,
-            media_body=media,
-            fields='id, webViewLink',
-            supportsAllDrives=True
-        ).execute()
-
-        # Permissions to make it publicly readable
-        service.permissions().create(
-            fileId=file.get('id'),
-            body={'type': 'anyone', 'role': 'reader'},
-            fields='id'
-        ).execute()
-
-        app.logger.info(f"File '{filename}' uploaded to Google Drive. Link: {file.get('webViewLink')}")
-        return file.get('webViewLink')
-
-    except HttpError as error:
-        app.logger.error(f"An error occurred during Google Drive upload: {error.resp.status} {error.resp.reason} - {error.content}", exc_info=True)
-        flash(f"Error uploading document to Google Drive: {error.resp.status} - {error.resp.reason}", 'danger')
-        return None
-    except Exception as e:
-        app.logger.error(f"An unexpected error occurred: {e}", exc_info=True)
-        flash(f"An unexpected error occurred during document upload.", 'danger')
-        return None
-
-# NEW HELPER: Function to append EOD data to a Google Sheet
-# Replaces _append_eod_data_to_google_csv
-def _append_eod_data_to_google_sheet(spreadsheet_id, data_row_dict): # REMOVED uploaded_image_links parameter
-    """
-    Appends a row of data to the specified Google Sheet.
-    Automatically adds a header row if the sheet is empty.
-    Assumes 'Image Links' field in data_row_dict is already formatted as a Sheets HYPERLINK formula.
-    Returns the URL of the Google Sheet.
-    """
-    try:
-        services = get_drive_service()
-        sheets_service = services['sheets']
-
-        # Determine if header needs to be added
-        result = sheets_service.spreadsheets().values().get(
-            spreadsheetId=spreadsheet_id, range='A1'
-        ).execute()
-        values = result.get('values', [])
-        sheet_is_empty = not values
-
-        # Construct the row to append based on the ordered keys in data_row_dict
-        row_values = []
-        for key in data_row_dict.keys(): # Iterate over keys to maintain order
-            row_values.append(data_row_dict[key]) # Just append the value directly
-
-        # If sheet is empty, first add the header
-        if sheet_is_empty:
-            header = list(data_row_dict.keys()) # Get the ordered headers
-            body = {'values': [header]}
-            sheets_service.spreadsheets().values().update(
-                spreadsheetId=spreadsheet_id, range='A1',
-                valueInputOption='RAW', body=body # RAW for header strings
-            ).execute()
-            app.logger.info(f"Added header to Google Sheet {spreadsheet_id}.")
-
-        # Append the new data row
-        body = {'values': [row_values]}
-        sheets_service.spreadsheets().values().append(
-            spreadsheetId=spreadsheet_id, range='A:A',
-            valueInputOption='USER_ENTERED', # IMPORTANT: Use USER_ENTERED to parse formulas
-            insertDataOption='INSERT_ROWS', body=body
-        ).execute()
-
-        app.logger.info(f"Appended data to Google Sheet {spreadsheet_id}.")
-        drive_service = services['drive']
-        sheet_metadata = drive_service.files().get(fileId=spreadsheet_id, fields='webViewLink', supportsAllDrives=True).execute()
-        return sheet_metadata.get('webViewLink')
-
-    except Exception as e:
-        app.logger.error(f"An unexpected error occurred during Google Sheets API operation: {e}", exc_info=True)
-        return None
-
 
 # MODIFIED: Function to send the EOD report email
 def send_eod_report_email(report_data, manager_name, image_links, recipient_emails, eod_sheet_link=None, drive_folder_link=None, personal_email_copy=None):
@@ -502,7 +259,7 @@ def send_eod_report_email(report_data, manager_name, image_links, recipient_emai
     """
     try:
         msg = Message("End of Day Report - " + report_data.report_date.strftime('%Y-%m-%d'),
-                      sender=app.config['MAIL_DEFAULT_SENDER'])
+                      sender=current_app.config['MAIL_DEFAULT_SENDER'])
 
         to_recipients = list(recipient_emails)
         if personal_email_copy and personal_email_copy not in to_recipients:
@@ -587,18 +344,20 @@ SCHEDULER_SHIFT_TYPES = ['Day', 'Night', 'Double', 'Open', 'Split Double'] # ADD
 STAFF_SUBMISSION_SHIFT_TYPES = ['Day', 'Night', 'Double'] # Staff only submit for standard types
 
 
-def _render_scheduler_for_role(role_name, role_label):
+def _render_scheduler_for_role(role_name, role_label, week_offset=0):
     today = datetime.utcnow().date()
-    start_of_week, week_dates, end_of_week, leave_dict = _build_week_dates()
+
+    # Use the modified _build_week_dates
+    start_of_week, week_dates, end_of_week, leave_dict = _build_week_dates(week_offset=week_offset)
 
     # Filter users to include only those with the specified role
     users_in_role_query = User.query.join(User.roles).filter(Role.name == role_name, User.is_suspended == False)
 
     if role_name == 'manager':
         users_in_role_query = User.query.join(User.roles).filter(
-            or_(Role.name == 'manager'),
+            or_(Role.name == 'manager', Role.name == 'general_manager', Role.name == 'system_admin'),
             User.is_suspended == False
-            )
+        )
 
     users = users_in_role_query.order_by(User.full_name).all()
 
@@ -609,15 +368,32 @@ def _render_scheduler_for_role(role_name, role_label):
     ).all()
 
     user_availability = {}
+    users_with_submissions_for_week = set() # NEW: To track who submitted shifts
     for sub in submissions:
         user_availability.setdefault(sub.user_id, {}).setdefault(sub.shift_date, set()).add(sub.shift_type)
+        users_with_submissions_for_week.add(sub.user_id) # Add user to the set
 
     # Convert sets to lists for Jinja
     for user_id, days in user_availability.items():
         for day, shifts_set in days.items():
             user_availability[user_id][day] = list(shifts_set)
 
+    # Prepare a list of users who submitted shifts for the week to pass to the template
+    submitted_users_details = []
+    for user_id in users_with_submissions_for_week:
+        user_obj = next((u for u in users if u.id == user_id), None)
+        if user_obj:
+            submitted_users_details.append({
+                'id': user_obj.id,
+                'full_name': user_obj.full_name,
+                'roles': [r.name for r in user_obj.roles] # Optional: list roles for display
+            })
+    # Sort submitted_users_details by full_name
+    submitted_users_details.sort(key=lambda x: x['full_name'])
+
+
     # Fetch existing published assignments for the week
+
     # Important: retrieve assignments of the specific roles currently being scheduled
     assigned_shifts_query = Schedule.query.filter(
         Schedule.shift_date.in_(week_dates),
@@ -636,10 +412,8 @@ def _render_scheduler_for_role(role_name, role_label):
     # Calculate staffing status for the week
     staffing_status = {}
     for day in week_dates:
-        if day.weekday() == 0: continue # Skip Monday for display_dates
+        if day.weekday() == 0: continue # Skip Monday for display_dates (as per scheduler_role.html's columns)
 
-        # Count actual assignments from the `assignments` dict
-        # The assignments dict is {day: {user_id: Schedule_object}}
         assigned_count = sum(1 for user_id, shift_obj in assignments.get(day, {}).items() if shift_obj.user_id is not None)
 
         required_staff_entry = RequiredStaff.query.filter_by(role_name=role_name, shift_date=day).first()
@@ -686,11 +460,13 @@ def _render_scheduler_for_role(role_name, role_label):
         get_role_specific_shift_types=get_role_specific_shift_types, # Pass helper for filtering dropdowns
         get_shift_time_display=get_shift_time_display, # Pass helper for displaying times
         today=today,
-        staffing_status=staffing_status
+        staffing_status=staffing_status,
+        current_week_offset=week_offset, # NEW: Pass current week offset
+        submitted_users_for_week=submitted_users_details # NEW: Pass users who submitted shifts for this week
     )
 
-def _process_schedule_post_request(role_name, request_form):
-    start_of_week, week_dates, end_of_week, _ = _build_week_dates()
+def _process_schedule_post_request(role_name, request_form, week_offset=0):
+    start_of_week, week_dates, end_of_week, _ = _build_week_dates(week_offset=week_offset)
 
     # Determine which users belong to this role (including managers, GMs, system_admins for 'manager' role)
     users_in_role_query = User.query.join(User.roles).filter(User.is_suspended == False)
@@ -709,36 +485,46 @@ def _process_schedule_post_request(role_name, request_form):
         Schedule.query.filter(
             Schedule.shift_date >= start_of_week,
             Schedule.shift_date <= end_of_week,
-            Schedule.user_id.in_(user_ids_in_role) if user_ids_in_role else False
+            Schedule.user_id.in_(user_ids_in_role) if user_ids_in_role else False,
+            Schedule.published == True # Only delete published shifts
+        ).delete(synchronize_session=False)
+        db.session.flush()
+
+        # Delete any existing draft shifts for this role and week before saving new ones
+        Schedule.query.filter(
+            Schedule.shift_date >= start_of_week,
+            Schedule.shift_date <= end_of_week,
+            Schedule.user_id.in_(user_ids_in_role) if user_ids_in_role else False,
+            Schedule.published == False # Only delete draft shifts
         ).delete(synchronize_session=False)
         db.session.flush()
 
         for user in users_in_role:
             for day in week_dates:
+                # We skip Monday in the display, so only process days Tuesday-Sunday for consistency with the form
+                if day.weekday() == 0: continue
+
                 assigned_shift_type = request_form.get(f'assignment_{day.isoformat()}_{user.id}')
 
                 if assigned_shift_type and assigned_shift_type != "":
                     start_time_str = None
                     end_time_str = None
 
-                    # These shift types require custom time input (ensure they are validated if required)
-                    # We use the generic SCHEDULER_SHIFT_TYPES_GENERIC list for validation against custom types
-                    if assigned_shift_type in SCHEDULER_SHIFT_TYPES_GENERIC: # Check against the full list
-                        # Dynamically get defined shifts for the specific role and day
+                    if assigned_shift_type in SCHEDULER_SHIFT_TYPES_GENERIC:
                         day_name = day.strftime('%A')
                         role_specific_shift_types = get_role_specific_shift_types(role_name, day_name)
 
-                        if assigned_shift_type in role_specific_shift_types and \
-                            (ROLE_SHIFT_DEFINITIONS.get(role_name, {}).get(day_name, ROLE_SHIFT_DEFINITIONS.get(role_name, {}).get('default', {})).get(assigned_shift_type, {}).get('start') == 'Specified by Scheduler' or
-                             ROLE_SHIFT_DEFINITIONS.get(role_name, {}).get(day_name, ROLE_SHIFT_DEFINITIONS.get(role_name, {}).get('default', {})).get(assigned_shift_type, {}).get('end') == 'Specified by Scheduler'):
+                        if assigned_shift_type in role_specific_shift_types:
+                            role_def_for_day = ROLE_SHIFT_DEFINITIONS.get(role_name, {}).get(day_name) or ROLE_SHIFT_DEFINITIONS.get(role_name, {}).get('default', {})
+                            shift_times_def = role_def_for_day.get(assigned_shift_type, {})
 
-                            start_time_str = request_form.get(f'assignment_{day.isoformat()}_{user.id}_start_time')
-                            end_time_str = request_form.get(f'assignment_{day.isoformat()}_{user.id}_end_time')
+                            if shift_times_def.get('start') == 'Specified by Scheduler' or shift_times_def.get('end') == 'Specified by Scheduler':
+                                start_time_str = request_form.get(f'assignment_{day.isoformat()}_{user.id}_start_time')
+                                end_time_str = request.form.get(f'assignment_{day.isoformat()}_{user.id}_end_time')
 
-                            if not start_time_str or not end_time_str:
-                                # Flash message already handled by client-side validation, but good for backend too
-                                flash(f"Start and End times are required for {assigned_shift_type} on {day.strftime('%a, %b %d')} for {user.full_name}.", 'danger')
-                                raise ValueError("Custom shift times missing")
+                                if not start_time_str or not end_time_str:
+                                    flash(f"Start and End times are required for {assigned_shift_type} on {day.strftime('%a, %b %d')} for {user.full_name}.", 'danger')
+                                    raise ValueError("Custom shift times missing")
 
                     s = Schedule(
                         shift_date=day,
@@ -753,18 +539,41 @@ def _process_schedule_post_request(role_name, request_form):
         db.session.commit()
         if request_form.get('action') == 'publish':
             flash(f'{role_name.title()} schedule saved and published.', 'success')
+            log_activity(f"Published {role_name.title()} schedule for week starting {start_of_week.strftime('%Y-%m-%d')}.")
+
+            users_to_notify_query = User.query.join(User.roles).filter(
+                Role.name == role_name,
+                User.is_suspended == False
+            )
+            # If manager schedule is published, also notify general managers and system admins
+            if role_name == 'manager':
+                users_to_notify_query = User.query.join(User.roles).filter(
+                    or_(Role.name == 'manager', Role.name == 'general_manager', Role.name == 'system_admin'),
+                    User.is_suspended == False
+                )
+
+            users_to_notify = users_to_notify_query.all()
+            for user_to_notify in users_to_notify:
+                send_push_notification(
+                    user_to_notify.id,
+                    f"{role_name.title()} Schedule Published!",
+                    f"The new {role_name.title()} schedule for the week of {start_of_week.strftime('%b %d')} has been published. Check your schedule now!",
+                    data={"type": "schedule_published", "role": role_name, "week_start": start_of_week.isoformat()}
+                )                
         else:
             flash(f'{role_name.title()} schedule draft saved.', 'info')
-        return True # Indicate success
+            log_activity(f"Saved draft for {role_name.title()} schedule for week starting {start_of_week.strftime('%Y-%m-%d')}.")
+        return True
     except ValueError as ve:
         db.session.rollback()
         flash(f'Failed to save {role_name} schedule: {ve}', 'danger')
-        return False # Indicate failure
+        app.logger.error(f"Failed to save {role_name} schedule (ValueError): {ve}")
+        return False
     except Exception as e:
         db.session.rollback()
-        flash(f'Failed to save {role_name} schedule: {e}', 'danger')
+        flash(f'Failed to save {role_name} schedule due to an unexpected error: {e}', 'danger')
         app.logger.exception(f"Error saving {role_name} schedule.")
-        return False # Indicate failure
+        return False
 
 def _calculate_ingredient_usage_from_cocktails_sold(target_date):
     """
@@ -988,387 +797,8 @@ def before_request_handler():
             db.session.commit()
 
 # ==============================================================================
-# Database Models
+# shift volunteering management routes
 # ==============================================================================
-
-class Warning(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False) # Staff member receiving the warning
-    issued_by_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False) # Manager who issued the warning
-    date_issued = db.Column(db.Date, nullable=False, default=datetime.utcnow().date)
-    reason = db.Column(db.Text, nullable=False)
-    severity = db.Column(db.String(50), nullable=False, default='Minor') # e.g., 'Minor', 'Major', 'Critical'
-    status = db.Column(db.String(50), nullable=False, default='Active') # e.g., 'Active', 'Resolved', 'Expired'
-    notes = db.Column(db.Text, nullable=True) # Internal manager notes
-    resolution_date = db.Column(db.Date, nullable=True)
-    resolved_by_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True) # Manager who resolved it
-    timestamp = db.Column(db.DateTime, nullable=False, default=datetime.utcnow) # When the warning was created
-
-    # Relationships
-    user = db.relationship('User', foreign_keys=[user_id], backref=db.backref('warnings_received', lazy=True))
-    issued_by = db.relationship('User', foreign_keys=[issued_by_id], backref=db.backref('warnings_issued', lazy=True))
-    resolved_by = db.relationship('User', foreign_keys=[resolved_by_id], backref=db.backref('warnings_resolved', lazy=True))
-
-    __table_args__ = {'extend_existing': True}
-
-class EndOfDayReport(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    report_date = db.Column(db.Date, nullable=False, default=datetime.utcnow().date, unique=True) # One report per day
-    manager_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False) # Manager who submitted the report
-
-    # Operational Checks
-    gas_ordered = db.Column(db.Boolean, nullable=True) # Yes/No
-    garnish_ordered = db.Column(db.Boolean, nullable=True) # Yes/No
-    maintenance_issues = db.Column(db.Text, nullable=True)
-    staff_pitched_absences = db.Column(db.Text, nullable=True)
-    staff_deductions = db.Column(db.Text, nullable=True)
-    stock_borrowed_lent = db.Column(db.Text, nullable=True) # Will store notes or links to announcements
-    customer_complaints = db.Column(db.Text, nullable=True)
-    customer_complaint_contact_no = db.Column(db.Text, nullable=True) # Sub-line: Where possible, collect the customers' details and invite them back
-
-    # Closing Checks
-    shop_phone_on_charge = db.Column(db.Boolean, nullable=True) # Yes/No
-    tv_boxes_locked = db.Column(db.Boolean, nullable=True) # Yes/No
-    all_equipment_switched_off = db.Column(db.Boolean, nullable=True) # Yes/No
-
-    # Financials
-    credit_card_machines_banked = db.Column(db.Boolean, nullable=True) # Yes/No
-    card_machines_on_charge = db.Column(db.Boolean, nullable=True) # Yes/No
-    declare_card_sales_pos360 = db.Column(db.String(100), nullable=True) # Text field for the declared amount
-    actual_card_figure_banked = db.Column(db.String(100), nullable=True) # Text field for actual amount
-    declare_cash_sales_pos360 = db.Column(db.String(100), nullable=True) # Text field for declared amount
-    actual_cash_on_hand = db.Column(db.String(100), nullable=True) # Text field for actual amount
-    accounts_amount = db.Column(db.Text, nullable=True) # Multi-line text for (per account)
-    stock_wastage_value = db.Column(db.Text, nullable=True) # Notes down any stock wastage and the value thereof
-
-    # Daily Performance & Security
-    pos360_day_end_complete = db.Column(db.Boolean, nullable=True) # Yes/No
-    todays_target = db.Column(db.String(255), nullable=True) # Text input field
-    turnover_ex_tips = db.Column(db.String(255), nullable=True) # Text input field
-    security_walk_through_clean_shop = db.Column(db.Boolean, nullable=True) # Yes/No
-    other_issues_experienced = db.Column(db.Text, nullable=True)
-
-    # Email Copy Option
-    email_copy_address = db.Column(db.String(255), nullable=True) # Open field for email address
-
-    # Relationships
-    manager = db.relationship('User', backref=db.backref('eod_reports', lazy=True))
-    images = db.relationship('EndOfDayReportImage', backref='eod_report', lazy=True, cascade="all, delete-orphan")
-
-    __table_args__ = {'extend_existing': True}
-
-
-# NEW MODEL: EndOfDayReportImage (for multiple image uploads)
-class EndOfDayReportImage(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    eod_report_id = db.Column(db.Integer, db.ForeignKey('end_of_day_report.id'), nullable=False)
-    image_url = db.Column(db.String(500), nullable=False) # Google Drive webViewLink
-    filename = db.Column(db.String(255), nullable=True) # Original filename for reference
-
-
-class RecountRequest(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    product_id = db.Column(db.Integer, db.ForeignKey('product.id'), nullable=True) # For product-specific recount
-    location_id = db.Column(db.Integer, db.ForeignKey('location.id'), nullable=True) # For location-specific recount
-
-    # Must specify either product_id OR location_id
-    __table_args__ = (db.CheckConstraint('product_id IS NOT NULL OR location_id IS NOT NULL', name='product_or_location_required'),)
-
-    requested_by_user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
-    request_date = db.Column(db.Date, nullable=False, default=datetime.utcnow().date)
-    status = db.Column(db.String(20), nullable=False, default='Pending') # Pending, Completed, Cancelled
-    timestamp = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
-
-    # Relationships for convenience
-    product = db.relationship('Product', backref=db.backref('recount_requests', lazy=True))
-    location = db.relationship('Location', backref=db.backref('recount_requests', lazy=True))
-    requested_by = db.relationship('User', backref=db.backref('initiated_recount_requests', lazy=True))
-
-class Booking(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    customer_name = db.Column(db.String(100), nullable=False)
-    contact_info = db.Column(db.String(100), nullable=True) # E.g., phone or email
-    party_size = db.Column(db.Integer, nullable=False)
-    booking_date = db.Column(db.Date, nullable=False)
-    booking_time = db.Column(db.String(50), nullable=False) # E.g., "19:00", "7:00 PM"
-    notes = db.Column(db.Text, nullable=True)
-    status = db.Column(db.String(20), nullable=False, default='Pending') # Pending, Confirmed, Cancelled, Completed
-    timestamp = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
-    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False) # User who logged the booking
-
-    user = db.relationship('User', backref=db.backref('logged_bookings', lazy=True))
-
-def _build_week_dates():
-    today = datetime.utcnow().date()
-    days_since_monday = today.weekday()
-    start_of_week = today - timedelta(days=days_since_monday) # This is the Monday of the current week (or past Monday)
-    week_dates = [start_of_week + timedelta(days=i) for i in range(7)]
-    end_of_week = week_dates[-1]
-
-    # Leave requests for all users this week
-    leave_requests_this_week = LeaveRequest.query.filter(
-        LeaveRequest.status == 'Approved',
-        LeaveRequest.start_date <= end_of_week,
-        LeaveRequest.end_date >= start_of_week
-    ).all()
-    leave_dict = {}
-    for req in leave_requests_this_week:
-        for d in week_dates:
-            if req.start_date <= d <= req.end_date:
-                leave_dict.setdefault(req.user_id, set()).add(d)
-
-    return start_of_week, week_dates, end_of_week, leave_dict
-
-
-
-class VarianceExplanation(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    count_id = db.Column(db.Integer, db.ForeignKey('count.id'), nullable=False, unique=True) # Each variance explanation links to one Count
-    reason = db.Column(db.Text, nullable=False)
-    timestamp = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
-    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False) # Who provided the explanation
-
-    count = db.relationship('Count', backref=db.backref('variance_explanation', uselist=False, cascade="all, delete-orphan", lazy=True))
-    user = db.relationship('User', backref=db.backref('variance_explanations', lazy=True))
-    __table_args__ = {'extend_existing': True}
-
-class Delivery(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    product_id = db.Column(db.Integer, db.ForeignKey('product.id'), nullable=False)
-    quantity = db.Column(db.Float, nullable=False)
-    delivery_date = db.Column(db.Date, nullable=False, default=datetime.utcnow().date)
-    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
-    comment = db.Column(db.Text, nullable=True)
-    timestamp = db.Column(db.DateTime, nullable=False, default=datetime.utcnow) # When it was logged
-
-    product = db.relationship('Product', backref=db.backref('deliveries', lazy=True))
-    user = db.relationship('User', backref=db.backref('delivery_logs', lazy=True))
-
-
-class CocktailsSold(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    recipe_id = db.Column(db.Integer, db.ForeignKey('recipe.id'), nullable=False)
-    quantity_sold = db.Column(db.Integer, nullable=False, default=0)
-    date = db.Column(db.Date, nullable=False, default=datetime.utcnow().date)
-
-    recipe = db.relationship('Recipe', backref=db.backref('cocktails_sold_entries', lazy=True))
-
-    __table_args__ = (db.UniqueConstraint('recipe_id', 'date', name='_recipe_date_uc'),)
-
-class RequiredStaff(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    role_name = db.Column(db.String(50), nullable=False) # e.g., 'bartender', 'waiter', 'all_staff'
-    shift_date = db.Column(db.Date, nullable=False)
-    min_staff = db.Column(db.Integer, nullable=False, default=1) # Minimum staff required for the day
-    max_staff = db.Column(db.Integer, nullable=True) # Max staff allowed, nullable for flexibility
-
-    __table_args__ = (db.UniqueConstraint('role_name', 'shift_date', name='_role_date_uc'),)
-    __table_args__ = (db.UniqueConstraint('role_name', 'shift_date', name='_role_date_uc'), {'extend_existing': True})
-
-product_location = db.Table('product_location',
-    db.Column('product_id', db.Integer, db.ForeignKey('product.id'), primary_key=True),
-    db.Column('location_id', db.Integer, db.ForeignKey('location.id'), primary_key=True)
-)
-announcement_view = db.Table('announcement_view',
-    db.Column('user_id', db.Integer, db.ForeignKey('user.id'), primary_key=True),
-    db.Column('announcement_id', db.Integer, db.ForeignKey('announcement.id'), primary_key=True)
-)
-user_roles = db.Table('user_roles',
-    db.Column('user_id', db.Integer, db.ForeignKey('user.id'), primary_key=True),
-    db.Column('role_id', db.Integer, db.ForeignKey('role.id'), primary_key=True)
-)
-
-announcement_roles = db.Table('announcement_roles',
-    db.Column('announcement_id', db.Integer, db.ForeignKey('announcement.id'), primary_key=True),
-    db.Column('role_id', db.Integer, db.ForeignKey('role.id'), primary_key=True)
-)
-
-class Role(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    name = db.Column(db.String(50), unique=True, nullable=False)
-
-class User(db.Model, UserMixin):
-    id = db.Column(db.Integer, primary_key=True)
-    username = db.Column(db.String(20), unique=True, nullable=False)
-    full_name = db.Column(db.String(100), nullable=False)
-    password = db.Column(db.String(60), nullable=False)
-    password_reset_requested = db.Column(db.Boolean, nullable=False, default=False)
-    last_seen = db.Column(db.DateTime, default=datetime.utcnow)
-    force_logout_requested = db.Column(db.Boolean, default=False)
-    is_suspended = db.Column(db.Boolean, default=False, nullable=False)
-    suspension_end_date = db.Column(db.Date, nullable=True)
-    suspension_document_path = db.Column(db.String(255), nullable=True)
-    email = db.Column(db.String(255), nullable=True) # NEW: Email field
-    roles = db.relationship('Role', secondary=user_roles, backref=db.backref('users', lazy='dynamic'))
-    counts = db.relationship('Count', backref='user', lazy=True)
-    announcements = db.relationship('Announcement', backref='user', lazy=True)
-    seen_announcements = db.relationship('Announcement', secondary=announcement_view, back_populates='viewers', lazy='dynamic')
-
-    @property
-    def role_names(self):
-        return [role.name for role in self.roles]
-
-    def has_role(self, role_name):
-        return role_name in self.role_names
-
-class Location(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    name = db.Column(db.String(50), unique=True, nullable=False)
-    products = db.relationship('Product', secondary=product_location, back_populates='locations', lazy='dynamic')
-
-class Product(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    name = db.Column(db.String(100), unique=True, nullable=False)
-    type = db.Column(db.String(50), nullable=False)
-    unit_of_measure = db.Column(db.String(10), nullable=False)
-    unit_price = db.Column(db.Float, nullable=True)
-    # NEW: Add product_number field
-    product_number = db.Column(db.String(50))
-    counts = db.relationship('Count', backref='product', lazy=True, cascade="all, delete-orphan")
-    locations = db.relationship('Location', secondary=product_location, back_populates='products', lazy='dynamic')
-
-class Announcement(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
-    title = db.Column(db.String(100), nullable=False)
-    message = db.Column(db.Text, nullable=False)
-    category = db.Column(db.String(50), nullable=False, default='General')
-    timestamp = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
-    viewers = db.relationship('User', secondary=announcement_view, back_populates='seen_announcements', lazy='dynamic')
-    target_roles = db.relationship('Role', secondary=announcement_roles, backref=db.backref('targeted_announcements', lazy='dynamic'))
-
-    # --- NEW FIELD ---
-    action_link = db.Column(db.String(255), nullable=True) # URL endpoint for actionable announcements
-    # --- END NEW FIELD ---
-
-class Count(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    product_id = db.Column(db.Integer, db.ForeignKey('product.id'), nullable=False)
-    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
-    location = db.Column(db.String(50), nullable=False)
-    count_type = db.Column(db.String(20), nullable=False)
-    amount = db.Column(db.Float, nullable=False)
-    comment = db.Column(db.Text, nullable=True)
-    timestamp = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
-    expected_amount = db.Column(db.Float, nullable=True) # Expected stock at time of count
-    variance_amount = db.Column(db.Float, nullable=True) # Actual amount - expected amount
-
-class BeginningOfDay(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    product_id = db.Column(db.Integer, db.ForeignKey('product.id'), nullable=False)
-    amount = db.Column(db.Float, nullable=False)
-    date = db.Column(db.Date, nullable=False, default=datetime.utcnow().date)
-    __table_args__ = (db.UniqueConstraint('product_id', 'date', name='_product_date_uc'),)
-    product = db.relationship('Product', backref=db.backref('beginning_of_day_entries', lazy=True))
-
-class Sale(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    product_id = db.Column(db.Integer, db.ForeignKey('product.id'), nullable=False)
-    quantity_sold = db.Column(db.Float, nullable=False)
-    date = db.Column(db.Date, nullable=False, default=datetime.utcnow().date)
-    product = db.relationship('Product', backref=db.backref('sale_entries', lazy=True))
-
-class ActivityLog(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
-    timestamp = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
-    action = db.Column(db.String(255), nullable=False)
-    user = db.relationship('User', backref='activity_logs')
-
-class Recipe(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    name = db.Column(db.String(100), nullable=False)
-    # ingredients = db.Column(db.Text, nullable=False) # REMOVE THIS LINE
-    instructions = db.Column(db.Text, nullable=False)
-    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
-    timestamp = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
-    user = db.relationship('User', backref='recipes')
-    # Add relationship to RecipeIngredient (already done via backref in RecipeIngredient)
-
-class RecipeIngredient(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    recipe_id = db.Column(db.Integer, db.ForeignKey('recipe.id'), nullable=False)
-    product_id = db.Column(db.Integer, db.ForeignKey('product.id'), nullable=False)
-    quantity = db.Column(db.Float, nullable=False) # Quantity of this product used in ONE unit of the recipe
-
-    # Define relationships
-    recipe = db.relationship('Recipe', backref=db.backref('recipe_ingredients', cascade="all, delete-orphan", lazy=True))
-    product = db.relationship('Product', backref=db.backref('recipe_usages', lazy=True))
-
-    __table_args__ = (db.UniqueConstraint('recipe_id', 'product_id', name='_recipe_product_uc'),)
-
-class ShiftSubmission(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
-    shift_date = db.Column(db.Date, nullable=False)
-    shift_type = db.Column(db.String(50), nullable=False)
-    timestamp = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
-    user = db.relationship('User', backref='shift_submissions')
-
-class Schedule(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
-    shift_date = db.Column(db.Date, nullable=False)
-    assigned_shift = db.Column(db.String(50), nullable=False)
-    published = db.Column(db.Boolean, default=False)
-    start_time_str = db.Column(db.String(50), nullable=True) # NEW: For custom shift times like Split Double
-    end_time_str = db.Column(db.String(50), nullable=True)   # NEW: For custom shift times like Split Double
-    user = db.relationship('User', backref=db.backref('scheduled_shifts', cascade="all, delete-orphan"))
-
-class ShiftSwapRequest(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    schedule_id = db.Column(db.Integer, db.ForeignKey('schedule.id'), nullable=False)
-    requester_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
-    coverer_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
-    status = db.Column(db.String(20), nullable=False, default='Pending')
-    timestamp = db.Column(db.DateTime, default=datetime.utcnow)
-    schedule = db.relationship('Schedule', backref='swap_requests')
-    requester = db.relationship('User', foreign_keys=[requester_id])
-    coverer = db.relationship('User', foreign_keys=[coverer_id])
-
-class LeaveRequest(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
-    start_date = db.Column(db.Date, nullable=False)
-    end_date = db.Column(db.Date, nullable=False)
-    reason = db.Column(db.Text, nullable=False)
-    document_path = db.Column(db.String(255), nullable=True)
-    status = db.Column(db.String(20), nullable=False, default='Pending')
-    timestamp = db.Column(db.DateTime, default=datetime.utcnow)
-    user = db.relationship('User', backref='leave_requests')
-
-volunteered_shift_candidates = db.Table('volunteered_shift_candidates',
-    db.Column('volunteered_shift_id', db.Integer, db.ForeignKey('volunteered_shift.id'), primary_key=True),
-    db.Column('user_id', db.Integer, db.ForeignKey('user.id'), primary_key=True)
-)
-
-class VolunteeredShift(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-
-    # Original shift that the user wants to give up
-    schedule_id = db.Column(db.Integer, db.ForeignKey('schedule.id'), nullable=False, unique=True)
-
-    # User who is giving up the shift
-    requester_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
-
-    # Status of the volunteering cycle: 'Open', 'PendingApproval', 'Approved', 'Cancelled'
-    status = db.Column(db.String(20), nullable=False, default='Open')
-
-    # Who ultimately got the shift (if approved)
-    approved_volunteer_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
-
-    timestamp = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
-
-    # Relationships
-    schedule = db.relationship('Schedule', backref=db.backref('volunteered_cycle', uselist=False, cascade="all, delete-orphan", lazy=True))
-    requester = db.relationship('User', foreign_keys=[requester_id], backref=db.backref('shifts_relinquished', lazy=True))
-    approved_volunteer = db.relationship('User', foreign_keys=[approved_volunteer_id], backref=db.backref('shifts_volunteered_approved', lazy=True))
-
-    # Many-to-many relationship for users who have volunteered for this shift
-    volunteers = db.relationship('User', secondary=volunteered_shift_candidates, backref=db.backref('shifts_volunteered_for', lazy='dynamic'))
-
-    # Add a reason for relinquishing (optional)
-    relinquish_reason = db.Column(db.Text, nullable=True)
 
 @app.route('/manage_volunteered_shifts')
 @login_required
@@ -1535,6 +965,62 @@ def approve_volunteer():
 # ==============================================================================
 # Main Routes
 # ==============================================================================
+
+@app.route('/complaint_feedback', methods=['GET', 'POST'])
+def complaint_feedback():
+    if request.method == 'POST':
+        is_anonymous = request.form.get('submit_anonymously') == 'on'
+        staff_position = request.form.get('staff_position')
+        feedback_date_str = request.form.get('date')
+        feedback_text = request.form.get('feedback')
+        send_copy = request.form.get('send_copy') == 'on'
+        personal_email_copy = request.form.get('email_copy_address')
+
+        if not feedback_date_str or not feedback_text:
+            flash('Date and Feedback are required fields.', 'danger')
+            return render_template('Complaint_feedback.html')
+
+        try:
+            feedback_date = datetime.strptime(feedback_date_str, '%Y-%m-%d').date()
+        except ValueError:
+            flash('Invalid date format for Feedback Date.', 'danger')
+            return render_template('Complaint_feedback.html')
+
+        # Prepare data for email
+        feedback_data = {
+            'is_anonymous': is_anonymous,
+            'submitter_name': current_user.full_name if current_user.is_authenticated and not is_anonymous else 'Anonymous',
+            'submission_date': datetime.utcnow(),
+            'staff_position': staff_position,
+            'feedback_date': feedback_date.isoformat(),
+            'feedback_text': feedback_text
+        }
+
+        # Determine recipients
+        # This can be configured in config.py, e.g., COMPLAINT_FEEDBACK_RECIPIENTS = ['manager@example.com']
+        recipient_emails = app.config.get('COMPLAINT_FEEDBACK_RECIPIENTS', [])
+
+        # Send email
+        email_sent_to_main = send_complaint_feedback_email(
+            feedback_data,
+            recipient_emails,
+            personal_email_copy if send_copy else None
+        )
+
+        if email_sent_to_main:
+            flash('Your feedback has been submitted successfully!', 'success')
+            if send_copy and personal_email_copy:
+                flash(f'A copy has been sent to {personal_email_copy}.', 'info')
+        else:
+            flash('Failed to submit feedback. Please try again later or contact support.', 'danger')
+
+        # Log activity (only if user is authenticated)
+        if current_user.is_authenticated:
+            log_activity(f"Submitted { 'anonymous' if is_anonymous else 'personal' } complaint/feedback for date {feedback_date_str}.")
+
+        return redirect(url_for('complaint_feedback'))
+
+    return render_template('Complaint_feedback.html', today_date=datetime.utcnow().date())
 
 @app.route('/announcements/clear-all', methods=['POST'])
 @login_required
@@ -2144,7 +1630,12 @@ def eod_report():
 
                 print(f"DEBUG: Calling upload_file_to_drive for '{filename}' to folder ID: '{app.config['GOOGLE_DRIVE_EOD_IMAGES_FOLDER_ID']}'.")
 
-                drive_link = upload_file_to_drive(file_stream, filename, mimetype, parent_folder_id=app.config['GOOGLE_DRIVE_EOD_IMAGES_FOLDER_ID'])
+                drive_link = upload_file_to_drive( # <--- NOW CALLS THE HELPER FROM UTILS
+                    file_stream,
+                    filename,
+                    mimetype,
+                    parent_folder_id=current_app.config['GOOGLE_DRIVE_EOD_IMAGES_FOLDER_ID'] # Use current_app.config
+                )
 
                 if drive_link:
                     print(f"DEBUG: Successfully uploaded '{filename}'. Google Drive Link: {drive_link}")
@@ -2232,8 +1723,8 @@ def eod_report():
             flash(f"Error preparing report data for Google Sheet: {e}", 'danger')
             return redirect(url_for('eod_report'))
 
-        eod_sheet_link = _append_eod_data_to_google_sheet(
-            app.config['EOD_REPORT_SHEET_ID'],
+        eod_sheet_link = append_eod_data_to_google_sheet( # <--- NOW CALLS THE HELPER FROM UTILS
+            current_app.config['EOD_REPORT_SHEET_ID'], # Use current_app.config
             sheet_row_data
         )
 
@@ -2323,10 +1814,34 @@ def reset_request():
         username = request.form.get('username')
         user = User.query.filter_by(username=username).first()
         if user:
+            # You can still keep this flag if it's used elsewhere, but for this request,
+            # the primary action is sending the email.
             user.password_reset_requested = True
             db.session.commit()
-            log_activity(f"Password reset requested for user: '{user.username}'.")
-        flash('If an account with that username exists, a reset request has been sent to the administrator.', 'info')
+
+            # --- Start of Changes ---
+            msg = Message('Password Reset Request',
+                          sender='valkyriethread@gmail.com', # Replace with your application's sender email
+                          recipients=['tristandutoit311@gmail.com'])
+            msg.body = f'''A password reset has been requested for the user: {username}.
+
+Please proceed to manually reset their password via the admin panel.
+
+No further action is required from the user at this time.
+'''
+            try:
+                mail.send(msg)
+                flash('If an account with that username exists, an administrator has been notified to reset the password.', 'info')
+                log_activity(f"Password reset request email sent for user: '{user.username}'.")
+            except Exception as e:
+                flash('An error occurred while sending the reset request email. Please try again later.', 'danger')
+                log_activity(f"Failed to send password reset request email for user: '{user.username}'. Error: {e}")
+            # --- End of Changes ---
+
+        else:
+            # To prevent username enumeration, always show a generic message whether user exists or not
+            flash('If an account with that username exists, an administrator has been notified to reset the password.', 'info')
+
         return redirect(url_for('login'))
     return render_template('reset_request.html')
 
@@ -2465,7 +1980,7 @@ def deliveries():
 
 @app.route('/beginning_of_day', methods=['GET', 'POST'])
 @login_required
-@role_required(['manager', 'system_admin'])
+@role_required(['manager', 'general_manager', 'system_admin'])
 def beginning_of_day():
     today_date = datetime.utcnow().date()
     yesterday = today_date - timedelta(days=1)
@@ -3203,6 +2718,7 @@ def explain_variance(count_id):
 # ==============================================================================
 # Recipe Book Routes
 # ==============================================================================
+
 @app.route('/recipes')
 @login_required
 @role_required(['system_admin', 'manager', 'bartender'])
@@ -3325,53 +2841,84 @@ def delete_recipe(recipe_id):
 # Scheduling Routes
 # ==============================================================================
 
-@app.route('/export/schedule/<string:role_name>')
+@app.route('/shifts_today', methods=['GET']) # <--- Define a clean URL path
 @login_required
-@role_required(['scheduler', 'manager', 'general_manager', 'system_admin'])
-def export_schedule_for_role(role_name):
-    _, week_dates, _, _ = _build_week_dates()
-    start_of_week = week_dates[0]
-    end_of_week = week_dates[-1]
+@role_required(['bartender', 'waiter', 'skullers', 'manager', 'general_manager', 'system_admin', 'owners'])
+def shifts_today(): # <--- This is the endpoint name for url_for('shifts_today')
+    today_date = datetime.utcnow().date()
 
-    # Get users for the specific role
-    users_in_role = User.query.join(User.roles).filter(Role.name == role_name).order_by(User.full_name).all()
-    user_ids_in_role = [u.id for u in users_in_role]
+    # Group users by role for display, similar to consolidated schedules
+    manager_users = User.query.join(User.roles).filter(
+        Role.name.in_(['manager', 'general_manager', 'system_admin'])
+    ).order_by(User.full_name).all()
 
-    if not user_ids_in_role:
-        flash(f"No users found for role '{role_name}' to export.", 'info')
-        return redirect(url_for(f'scheduler_{role_name}s'))
+    bartender_users = User.query.join(User.roles).filter(Role.name == 'bartender').order_by(User.full_name).all()
+    waiter_users = User.query.join(User.roles).filter(Role.name == 'waiter').order_by(User.full_name).all()
+    skuller_users = User.query.join(User.roles).filter(Role.name == 'skullers').order_by(User.full_name).all()
 
-    # Fetch published shifts for these users within the week
-    current_schedule = Schedule.query.filter(
-        Schedule.shift_date >= start_of_week,
-        Schedule.shift_date <= end_of_week,
-        Schedule.user_id.in_(user_ids_in_role),
+    # Fetch published shifts for today for all relevant users
+    all_shifts_today_raw = Schedule.query.filter(
+        Schedule.shift_date == today_date,
         Schedule.published == True
-    ).order_by(Schedule.shift_date, Schedule.assigned_shift).all()
+    ).all()
 
-    output = io.StringIO()
-    writer = csv.writer(output)
-    writer.writerow(['Date', 'Day', 'Staff Member', 'Role', 'Assigned Shift'])
+    shifts_by_role_categorized = {
+        'Managers': [],
+        'Bartenders': [],
+        'Waiters': [],
+        'Skullers': []
+    }
+    
+    # Use a dict to easily look up user details for shift
+    users_lookup = {user.id: user for user in User.query.all()}
 
-    for item in current_schedule:
-        staff_roles = ', '.join([role.name.replace('_', ' ').title() for role in item.user.roles])
-        writer.writerow([
-            item.shift_date.strftime('%Y-%m-%d'),
-            item.shift_date.strftime('%A'),
-            item.user.full_name,
-            staff_roles,
-            item.assigned_shift
-        ])
+    for shift in all_shifts_today_raw:
+        user = users_lookup.get(shift.user_id)
+        if not user:
+            continue # Skip if user not found
 
-    output.seek(0)
-    filename = f"{role_name}_schedule_{start_of_week.strftime('%Y-%m-%d')}_to_{end_of_week.strftime('%Y-%m-%d')}.csv"
-    return Response(output, mimetype="text/csv", headers={"Content-Disposition": f"attachment;filename={filename}"})
+        user_roles_names = [r.name for r in user.roles]
+        shift_info = {
+            'user_name': user.full_name,
+            'roles': ', '.join([r.replace('_', ' ').title() for r in user_roles_names]),
+            'assigned_shift': shift.assigned_shift,
+            'time_display': get_shift_time_display(
+                # Determine role for time display (take first relevant one)
+                'bartender' if 'bartender' in user_roles_names else
+                'waiter' if 'waiter' in user_roles_names else
+                'skullers' if 'skullers' in user_roles_names else
+                'manager', # Fallback for managers
+                today_date.strftime('%A'),
+                shift.assigned_shift,
+                custom_start=shift.start_time_str,
+                custom_end=shift.end_time_str
+            )
+        }
 
-@app.route('/manage-required-staff/<string:role_name>', methods=['GET', 'POST'])
+        if any(role in ['manager', 'general_manager', 'system_admin'] for role in user_roles_names):
+            shifts_by_role_categorized['Managers'].append(shift_info)
+        if 'bartender' in user_roles_names:
+            shifts_by_role_categorized['Bartenders'].append(shift_info)
+        if 'waiter' in user_roles_names:
+            shifts_by_role_categorized['Waiters'].append(shift_info)
+        if 'skullers' in user_roles_names:
+            shifts_by_role_categorized['Skullers'].append(shift_info)
+     
+    # Sort categories for consistent display
+    sorted_role_categories = ['Managers', 'Bartenders', 'Waiters', 'Skullers']
+
+    return render_template(
+        'daily_shifts.html',
+        today_date=today_date,
+        shifts_by_role_categorized=shifts_by_role_categorized,
+        sorted_role_categories=sorted_role_categories # To maintain order
+    )
+
+@app.route('/manage-required-staff/<string:role_name><optional_int:week_offset>', methods=['GET', 'POST'])
 @login_required
 @role_required(['scheduler', 'manager', 'general_manager', 'system_admin'])
-def manage_required_staff(role_name):
-    _, week_dates, _, _ = _build_week_dates()
+def manage_required_staff(role_name, week_offset): # Removed week_offset=0 from signature
+    start_of_week, week_dates, _, _ = _build_week_dates(week_offset=week_offset)
 
     if request.method == 'POST':
         for day in week_dates:
@@ -3397,7 +2944,8 @@ def manage_required_staff(role_name):
                                            week_dates=week_dates,
                                            role_name=role_name,
                                            existing_minimums=existing_minimums,
-                                           display_dates=[d for d in week_dates if d.weekday() != 0])
+                                           display_dates=[d for d in week_dates if d.weekday() != 0],
+                                           current_week_offset=week_offset)
 
                 required_staff_entry = RequiredStaff.query.filter_by(
                     role_name=role_name,
@@ -3419,12 +2967,8 @@ def manage_required_staff(role_name):
         db.session.commit()
         flash(f'Staff requirements for {role_name.title()} updated successfully.', 'success')
 
-        # --- MODIFIED: Correct endpoint for all roles (now using suffix for plural) ---
-        # Construct the endpoint name correctly (e.g., 'scheduler_bartenders', 'scheduler_managers')
-        # All scheduler endpoints are plural
-        scheduler_endpoint_name = f'scheduler_{role_name}s' # Add 's' to role_name for plural endpoints
-        return redirect(url_for(scheduler_endpoint_name))
-        # --- END MODIFIED ---
+        scheduler_endpoint_name = f'scheduler_{role_name}s'
+        return redirect(url_for(scheduler_endpoint_name, week_offset=week_offset))
 
     # GET request: Load existing minimums and maximums
     existing_minimums = {
@@ -3438,7 +2982,8 @@ def manage_required_staff(role_name):
                            week_dates=week_dates,
                            role_name=role_name,
                            existing_minimums=existing_minimums,
-                           display_dates=[d for d in week_dates if d.weekday() != 0])
+                           display_dates=[d for d in week_dates if d.weekday() != 0],
+                           current_week_offset=week_offset)
 
 @app.route('/submit-shifts', methods=['GET', 'POST'])
 @login_required
@@ -3567,65 +3112,60 @@ def submit_shifts():
                            submission_window_start=submission_window_start.isoformat(), # Pass ISO format
                            submission_window_end=submission_window_end.isoformat()) # Pass ISO format
 
-@app.route('/scheduler/bartenders', methods=['GET', 'POST'])
+@app.route('/scheduler/bartenders<optional_int:week_offset>', methods=['GET', 'POST'])
 @login_required
 @role_required(['scheduler', 'manager', 'general_manager', 'system_admin'])
-def scheduler_bartenders():
+def scheduler_bartenders(week_offset): # Removed week_offset=0 from signature
     if request.method == 'POST':
-        success = _process_schedule_post_request('bartender', request.form)
+        success = _process_schedule_post_request('bartender', request.form, week_offset)
         if success:
-            return redirect(url_for('scheduler_bartenders'))
+            return redirect(url_for('scheduler_bartenders', week_offset=week_offset))
         else:
-            # If there was an error, re-render the page with the current data and flash messages
-            # This will allow the user to see the error and try again without losing form data (if preserved by browser)
-            return _render_scheduler_for_role('bartender', 'Bartender')
+            return _render_scheduler_for_role('bartender', 'Bartender', week_offset)
 
-    return _render_scheduler_for_role('bartender', 'Bartender')
+    return _render_scheduler_for_role('bartender', 'Bartender', week_offset)
 
-@app.route('/scheduler/waiters', methods=['GET', 'POST'])
+
+@app.route('/scheduler/waiters<optional_int:week_offset>', methods=['GET', 'POST'])
 @login_required
 @role_required(['scheduler', 'manager', 'general_manager', 'system_admin'])
-def scheduler_waiters():
+def scheduler_waiters(week_offset): # Removed week_offset=0 from signature
     if request.method == 'POST':
-        success = _process_schedule_post_request('waiter', request.form)
+        success = _process_schedule_post_request('waiter', request.form, week_offset)
         if success:
-            return redirect(url_for('scheduler_waiters'))
+            return redirect(url_for('scheduler_waiters', week_offset=week_offset))
         else:
-            # If there was an error, re-render the page with the current data and flash messages
-            # This will allow the user to see the error and try again without losing form data (if preserved by browser)
-            return _render_scheduler_for_role('waiter', 'Waiter')
+            return _render_scheduler_for_role('waiter', 'Waiter', week_offset)
 
-    return _render_scheduler_for_role('waiter', 'Waiter')
+    return _render_scheduler_for_role('waiter', 'Waiter', week_offset)
 
-@app.route('/scheduler/skullers', methods=['GET', 'POST'])
+
+@app.route('/scheduler/skullers<optional_int:week_offset>', methods=['GET', 'POST'])
 @login_required
 @role_required(['scheduler', 'manager', 'general_manager', 'system_admin'])
-def scheduler_skullers():
+def scheduler_skullers(week_offset): # Removed week_offset=0 from signature
     if request.method == 'POST':
-        success = _process_schedule_post_request('skullers', request.form)
+        success = _process_schedule_post_request('skullers', request.form, week_offset)
         if success:
-            return redirect(url_for('scheduler_skullers'))
+            return redirect(url_for('scheduler_skullers', week_offset=week_offset))
         else:
-            # If there was an error, re-render the page with the current data and flash messages
-            # This will allow the user to see the error and try again without losing form data (if preserved by browser)
-            return _render_scheduler_for_role('skullers', 'Skuller')
+            return _render_scheduler_for_role('skullers', 'Skuller', week_offset)
 
-    return _render_scheduler_for_role('skullers', 'Skuller')
+    return _render_scheduler_for_role('skullers', 'Skuller', week_offset)
 
-@app.route('/scheduler/managers', methods=['GET', 'POST'])
+
+@app.route('/scheduler/managers<optional_int:week_offset>', methods=['GET', 'POST'])
 @login_required
 @role_required(['scheduler', 'manager', 'general_manager', 'system_admin'])
-def scheduler_managers():
+def scheduler_managers(week_offset): # Removed week_offset=0 from signature
     if request.method == 'POST':
-        success = _process_schedule_post_request('manager', request.form)
+        success = _process_schedule_post_request('manager', request.form, week_offset)
         if success:
-            return redirect(url_for('scheduler_managers'))
+            return redirect(url_for('scheduler_managers', week_offset=week_offset))
         else:
-            # If there was an error, re-render the page with the current data and flash messages
-            # This will allow the user to see the error and try again without losing form data (if preserved by browser)
-            return _render_scheduler_for_role('manager', 'Manager')
+            return _render_scheduler_for_role('manager', 'Manager', week_offset)
 
-    return _render_scheduler_for_role('manager', 'Manager')
+    return _render_scheduler_for_role('manager', 'Manager', week_offset)
 
 
 @app.route('/scheduler', methods=['GET'])
@@ -3633,18 +3173,18 @@ def scheduler_managers():
 def scheduler():
     # Dispatch to role-specific scheduler pages.
     # Prioritize roles with dedicated scheduler pages for direct access.
-    if current_user.has_role('bartender'):
-        return redirect(url_for('scheduler_bartenders'))
-    if current_user.has_role('waiter'):
-        return redirect(url_for('scheduler_waiters'))
-    if current_user.has_role('skullers'): # ADDED 'skullers'
-        return redirect(url_for('scheduler_skullers'))
-
-    # Users with general scheduling/management permissions default to the manager scheduler.
-    if (current_user.has_role('scheduler') or
-        current_user.has_role('general_manager') or
+    # Default to week_offset=0
+    if (current_user.has_role('bartender') or current_user.has_role('scheduler') or
+        current_user.has_role('manager') or current_user.has_role('general_manager') or
         current_user.has_role('system_admin')):
-        return redirect(url_for('scheduler_bartenders'))
+        # Explicitly pass week_offset=0
+        return redirect(url_for('scheduler_bartenders', week_offset=0))
+    if current_user.has_role('waiter'):
+        # Explicitly pass week_offset=0
+        return redirect(url_for('scheduler_waiters', week_offset=0))
+    if current_user.has_role('skullers'):
+        # Explicitly pass week_offset=0
+        return redirect(url_for('scheduler_skullers', week_offset=0))
 
     flash('Access denied. You do not have permission to view the scheduler.', 'danger')
     return redirect(url_for('dashboard'))
@@ -3653,8 +3193,10 @@ def scheduler():
 @login_required
 def my_schedule():
     view_type = request.args.get('view', 'personal')
-    week_dates = get_week_dates()
-    week_start, week_end = week_dates[0], week_dates[-1]
+
+    # Use _build_week_dates with default 0 offset for 'current' week
+    _, week_dates, week_end, _ = _build_week_dates(week_offset=0)
+    week_start = week_dates[0]
 
     shifts_query = Schedule.query.filter(
         Schedule.shift_date >= week_start,
@@ -3775,8 +3317,8 @@ def my_schedule():
                 'id': shift.id,
                 'assigned_shift': shift.assigned_shift,
                 'shift_date': shift.shift_date.isoformat() if shift.shift_date else None,
-                'start_time_str': shift.start_time_str, # NEW
-                'end_time_str': shift.end_time_str,     # NEW
+                'start_time_str': shift.start_time_str,
+                'end_time_str': shift.end_time_str,
                 'swap_requests': [
                     {
                         'id': req.id,
@@ -3823,8 +3365,6 @@ def my_schedule():
         display_role_name_for_rules=user_primary_role_for_rules,
         get_shift_time_display=get_shift_time_display
     )
-
-
 
 @app.route('/volunteer_for_shift', methods=['POST'])
 @login_required
@@ -3940,7 +3480,12 @@ def leave_requests():
             mimetype = mimetypes.guess_type(document.filename)[0] or 'application/octet-stream'
 
             # MODIFIED: Pass the specific leave documents subfolder ID
-            drive_link = upload_file_to_drive(file_stream, filename, mimetype, parent_folder_id=app.config['GOOGLE_DRIVE_LEAVE_DOCS_FOLDER_ID'])
+            drive_link = upload_file_to_drive( # <--- NOW CALLS THE HELPER FROM UTILS
+                file_stream,
+                filename,
+                mimetype,
+                parent_folder_id=current_app.config['GOOGLE_DRIVE_LEAVE_DOCS_FOLDER_ID'] # Use current_app.config
+            )
             if drive_link:
                 doc_path = drive_link
             else:
@@ -4003,11 +3548,15 @@ def view_leave_document(req_id):
 @login_required
 @role_required(['bartender', 'waiter', 'skullers'])
 def submit_new_swap_request():
-    requester_schedule_id = request.form.get('requester_schedule_id', type=int)
-    desired_cover_id = request.form.get('desired_cover_id', type=int)
+    data = request.get_json() if request.is_json else request.form
+    requester_schedule_id = data.get('requester_schedule_id', type=int)
+    desired_cover_id = data.get('desired_cover_id', type=int)
 
     if not requester_schedule_id or not desired_cover_id:
         flash('Invalid swap request. Please select a shift and a potential cover.', 'danger')
+        # For API, we'd return JSON error. For web, redirect.
+        if request.is_json:
+            return jsonify({"msg": "Invalid swap request. Missing shift or cover."}), 400
         return redirect(url_for('my_schedule', view='personal'))
 
     schedule_item = Schedule.query.get_or_404(requester_schedule_id)
@@ -4045,6 +3594,8 @@ def submit_new_swap_request():
 
     db.session.commit()
     log_activity(f"Requested a shift swap for {schedule_item.assigned_shift} on {shift_date_str}, suggesting {desired_cover_user.full_name}.")
+    if request.is_json:
+        return jsonify({"msg": "Your swap request has been submitted. A manager will be notified."}), 201
     flash('Your swap request has been submitted. A manager will be notified.', 'success')
     return redirect(url_for('my_schedule', view='personal'))
 
@@ -4052,11 +3603,14 @@ def submit_new_swap_request():
 @login_required
 @role_required(['bartender', 'waiter', 'skullers']) # Only staff roles can relinquish their own shifts
 def relinquish_shift():
-    schedule_id = request.form.get('schedule_id', type=int)
-    relinquish_reason = request.form.get('relinquish_reason')
+    data = request.get_json() if request.is_json else request.form
+    schedule_id = data.get('schedule_id', type=int)
+    relinquish_reason = data.get('relinquish_reason')
 
     if not schedule_id:
         flash('No shift selected to relinquish.', 'danger')
+        if request.is_json:
+            return jsonify({"msg": "No shift selected to relinquish."}), 400
         return redirect(url_for('my_schedule', view='personal'))
 
     schedule_item = Schedule.query.get_or_404(schedule_id)
@@ -4108,6 +3662,8 @@ def relinquish_shift():
 
     db.session.commit()
     log_activity(f"User {current_user.full_name} relinquished {schedule_item.assigned_shift} on {shift_date_str} for volunteering.")
+    if request.is_json:
+        return jsonify({"msg": "Your shift relinquishment request has been submitted. It is now open for volunteers."}), 201
     flash('Your shift relinquishment request has been submitted. It is now open for volunteers.', 'success')
     return redirect(url_for('my_schedule', view='personal'))
 
@@ -4577,29 +4133,46 @@ def export_product_breakdown():
     output.seek(0)
     return Response(output, mimetype="text/csv", headers={"Content-Disposition": f"attachment;filename=product_breakdown_{start_date_str}_to_{end_date_str}.csv"})
 
-@app.route('/export/schedule')
+@app.route('/export/schedule/<string:role_name><optional_int:week_offset>')
 @login_required
-@role_required(['scheduler', 'manager', 'general_manager'])
-def export_schedule():
-    today = datetime.utcnow().date()
-    week_dates = [today + timedelta(days=i) for i in range(7)]
+@role_required(['scheduler', 'manager', 'general_manager', 'system_admin'])
+def export_schedule_for_role(role_name, week_offset):
+    _, week_dates, _, _ = _build_week_dates(week_offset=week_offset)
+    start_of_week = week_dates[0]
+    end_of_week = week_dates[-1]
 
-    current_schedule = Schedule.query.filter(Schedule.shift_date.in_(week_dates)).order_by(Schedule.shift_date, Schedule.assigned_shift).all()
+    # Get users for the specific role
+    users_in_role = User.query.join(User.roles).filter(Role.name == role_name).order_by(User.full_name).all()
+    user_ids_in_role = [u.id for u in users_in_role]
+
+    if not user_ids_in_role:
+        flash(f"No users found for role '{role_name}' to export.", 'info')
+        return redirect(url_for(f'scheduler_{role_name}s', week_offset=week_offset))
+
+    # Fetch published shifts for these users within the week
+    current_schedule = Schedule.query.filter(
+        Schedule.shift_date >= start_of_week,
+        Schedule.shift_date <= end_of_week,
+        Schedule.user_id.in_(user_ids_in_role),
+        Schedule.published == True
+    ).order_by(Schedule.shift_date, Schedule.assigned_shift).all()
 
     output = io.StringIO()
     writer = csv.writer(output)
-    writer.writerow(['Date', 'Day', 'Shift', 'Assigned Staff'])
+    writer.writerow(['Date', 'Day', 'Staff Member', 'Role', 'Assigned Shift'])
 
     for item in current_schedule:
+        staff_roles = ', '.join([role.name.replace('_', ' ').title() for role in item.user.roles])
         writer.writerow([
             item.shift_date.strftime('%Y-%m-%d'),
             item.shift_date.strftime('%A'),
-            item.assigned_shift,
-            item.user.full_name
+            item.user.full_name,
+            staff_roles,
+            item.assigned_shift
         ])
 
     output.seek(0)
-    filename = f"schedule_{week_dates[0].strftime('%Y-%m-%d')}_to_{week_dates[-1].strftime('%Y-%m-%d')}.csv"
+    filename = f"{role_name}_schedule_{start_of_week.strftime('%Y-%m-%d')}_to_{end_of_week.strftime('%Y-%m-%d')}.csv"
     return Response(output, mimetype="text/csv", headers={"Content-Disposition": f"attachment;filename={filename}"})
 
 # ==============================================================================
@@ -4780,7 +4353,12 @@ def edit_user(user_id):
                 import mimetypes
                 mimetype = mimetypes.guess_type(suspension_document_file.filename)[0] or 'application/octet-stream'
 
-                drive_link = upload_file_to_drive(file_obj, filename, mimetype, parent_folder_id=app.config['GOOGLE_DRIVE_EOD_IMAGES_FOLDER_ID'])
+                drive_link = upload_file_to_drive( # <--- NOW CALLS THE HELPER FROM UTILS
+                    file_stream,
+                    filename,
+                    mimetype,
+                    parent_folder_id=current_app.config['GOOGLE_DRIVE_SUSPESION_DOCS_FOLDER_ID'] # Use current_app.config
+                )
                 if drive_link:
                     user_to_edit.suspension_document_path = drive_link
                     # No need to delete old file if overwriting with a new Drive link

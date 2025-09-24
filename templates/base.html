@@ -107,7 +107,8 @@
                                         <li><a class="dropdown-item" href="{{ url_for('manage_swaps') }}">Manage Swaps</a></li>
                                         <li><a class="dropdown-item" href="{{ url_for('manage_volunteered_shifts') }}">Manage Volunteered Shifts</a></li>
                                     {% endif %}
-
+                                <li><hr class="dropdown-divider"></li>
+                                <li><a class="dropdown-item" href="{{ url_for('complaint_feedback') }}">Submit Feedback</a></li>
                             </ul>
                         </li>
                         {% endif %}
@@ -168,7 +169,7 @@
                                     <li><h6 class="dropdown-header">Scheduling Tools</h6></li>
                                     <li><a class="dropdown-item" href="{{ url_for('scheduler') }}">Scheduler Tool</a></li>
                                     {# Linking to Bartender minimums as a common default entry point #}
-                                    <li><a class="dropdown-item" href="{{ url_for('manage_required_staff', role_name='bartender') }}">Manage Staff Minimums</a></li>
+                                    <li><a class="dropdown-item" href="{{ url_for('manage_required_staff', role_name='bartender', week_offset=0) }}">Manage Staff Minimums</a></li>
                                 {% endif %}
 
                                 {# User Management for managers/GMs/Admins #}

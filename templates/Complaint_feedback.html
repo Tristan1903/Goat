@@ -1,0 +1,89 @@
+{% extends "base.html" %}
+
+{% block title %}Complaint / Feedback{% endblock %}
+
+{% block content %}
+<div class="container my-4">
+    <div class="row justify-content-center">
+        <div class="col-md-8 col-lg-6">
+            <div class="card shadow-sm">
+                <div class="card-header bg-primary text-white">
+                    <h4 class="mb-0"><i class="fas fa-comment-alt me-2"></i>Submit Complaint / Feedback</h4>
+                </div>
+                <div class="card-body">
+                    <form method="POST" action="{{ url_for('complaint_feedback') }}">
+
+
+                        <div class="form-check form-switch mb-3">
+                            <input class="form-check-input" type="checkbox" id="submitAnonymously" name="submit_anonymously">
+                            <label class="form-check-label" for="submitAnonymously">Submit Anonymously</label>
+                            <small class="form-text text-muted d-block">If checked, your name will not be attached to this submission.</small>
+                        </div>
+
+                        <div class="mb-3">
+                            <label for="staffPosition" class="form-label">Staff Member Position (Optional)</label>
+                            <input type="text" class="form-control" id="staffPosition" name="staff_position" placeholder="e.g., Bartender, Waiter, Manager">
+                            <small class="form-text text-muted">Specify the position of a staff member relevant to your feedback (if applicable).</small>
+                        </div>
+
+                        <div class="mb-3">
+                            <label for="date" class="form-label">Date of Feedback <span class="text-danger">*</span></label>
+                            <input type="date" class="form-control" id="date" name="date" value="{{ today_date.isoformat() }}" required>
+                            <small class="form-text text-muted">The date the feedback or incident occurred.</small>
+                        </div>
+
+                        <div class="mb-3">
+                            <label for="feedback" class="form-label">Your Feedback <span class="text-danger">*</span></label>
+                            <textarea class="form-control" id="feedback" name="feedback" rows="7" placeholder="Provide detailed feedback here..." required></textarea>
+                        </div>
+
+                        <div class="form-check mb-3">
+                            <input class="form-check-input" type="checkbox" id="sendCopy" name="send_copy">
+                            <label class="form-check-label" for="sendCopy">Send me a copy</label>
+                        </div>
+
+                        <div class="mb-3" id="emailCopyAddressGroup" style="display: none;">
+                            <label for="emailCopyAddress" class="form-label">Email Address for Copy</label>
+                            <input type="email" class="form-control" id="emailCopyAddress" name="email_copy_address"
+                                   {% if current_user.is_authenticated and current_user.email %}value="{{ current_user.email }}"{% endif %}>
+                            <small class="form-text text-muted">Enter the email address to send a copy of this feedback.</small>
+                        </div>
+
+                        <button type="submit" class="btn btn-primary w-100"><i class="fas fa-paper-plane me-2"></i>Submit Feedback</button>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    document.addEventListener('DOMContentLoaded', function() {
+        const sendCopyCheckbox = document.getElementById('sendCopy');
+        const emailCopyAddressGroup = document.getElementById('emailCopyAddressGroup');
+        const emailCopyAddressInput = document.getElementById('emailCopyAddress');
+
+        function toggleEmailCopyField() {
+            if (sendCopyCheckbox.checked) {
+                emailCopyAddressGroup.style.display = 'block';
+                emailCopyAddressInput.setAttribute('required', 'required');
+            } else {
+                emailCopyAddressGroup.style.display = 'none';
+                emailCopyAddressInput.removeAttribute('required');
+            }
+        }
+
+        sendCopyCheckbox.addEventListener('change', toggleEmailCopyField);
+
+        // Initialize on page load
+        toggleEmailCopyField();
+
+        // Populate email if user is authenticated and has an email, but only if the field is empty
+        {% if current_user.is_authenticated and current_user.email %}
+            if (!emailCopyAddressInput.value) {
+                emailCopyAddressInput.value = "{{ current_user.email }}";
+            }
+        {% endif %}
+    });
+</script>
+{% endblock %}

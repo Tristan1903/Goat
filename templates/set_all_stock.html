@@ -4,6 +4,20 @@
 
 {% block content %}
 <div class="container mt-4">
+    <div id="flash-messages-container">
+        <!-- Flash messages from Flask will appear here, and also messages from JS flashMessage function -->
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, message in messages %}
+                    <div class="alert alert-{{ category }} alert-dismissible fade show" role="alert">
+                        {{ message }}
+                        <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+                    </div>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
+    </div>
+
     <div class="card shadow-sm">
         <div class="card-body p-4 p-md-5">
             <h2 class="card-title mb-2">Set All Product Stock</h2>
@@ -153,7 +167,11 @@ document.addEventListener('DOMContentLoaded', function() {
     const showAllProductsCheckbox = document.getElementById('show_all_products_checkbox');
     const productListDisplay = document.getElementById('product-list-display');
 
-    // Collect all product data including their original HTML elements
+    if (!productListDisplay) {
+        console.error("ERROR: #product-list-display element not found!");
+        return;
+    }
+
     let allProductRowsData = [];
     document.querySelectorAll('.product-row-template').forEach(templateDiv => {
         const productId = templateDiv.dataset.productId;
@@ -162,8 +180,11 @@ document.addEventListener('DOMContentLoaded', function() {
         const productNumber = templateDiv.dataset.productNumber;
         const originalStock = templateDiv.dataset.originalStock;
         
-        // Find the actual input element within the cloned template
         const stockInput = templateDiv.querySelector('.stock-input');
+        if (!stockInput) {
+            console.warn(`WARNING: Stock input element not found for product ID: ${productId}. Skipping this product from dynamic updates.`);
+            return; 
+        }
 
         allProductRowsData.push({
             element: templateDiv, // Store the entire template div (which contains table)
@@ -172,7 +193,7 @@ document.addEventListener('DOMContentLoaded', function() {
             type: productType,
             number: productNumber,
             originalStock: originalStock,
-            inputElement: stockInput
+            inputElement: stockInput // Store direct reference to the input within the *template* div
         });
     });
     console.log("DEBUG: allProductRowsData initialized with", allProductRowsData.length, "products.");
@@ -196,8 +217,33 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
 
+    function debounce(func, delay) {
+        let timeout;
+        return function(...args) {
+            const context = this;
+            clearTimeout(timeout);
+            timeout = setTimeout(() => func.apply(context, args), delay);
+        };
+    }
+
+    // Main function to apply filters and grouping
     function applyFiltersAndGrouping() {
         console.log("DEBUG: applyFiltersAndGrouping started.");
+        
+        // --- STEP 0: CAPTURE CURRENT LIVE INPUT VALUES BEFORE RE-RENDERING ---
+        // Iterate through all product rows currently in productListDisplay (the live ones)
+        document.querySelectorAll('#product-list-display .stock-input').forEach(liveInput => {
+            const productId = liveInput.name.replace('stock_value_', '');
+            const productData = allProductRowsData.find(p => p.id === productId);
+            if (productData && productData.inputElement) {
+                // Update the *value* of the inputElement reference within our allProductRowsData
+                // This inputElement is from the hidden template, but we are updating its value
+                // so when it's cloned later, it carries the latest user input.
+                productData.inputElement.value = liveInput.value;
+            }
+        });
+        // --- END STEP 0 ---
+
         const searchTerm = searchInput.value.toLowerCase();
         const selectedType = typeFilterSelect.value.toLowerCase();
         const selectedGroup = groupBySelect.value;
@@ -212,9 +258,9 @@ document.addEventListener('DOMContentLoaded', function() {
 
             let stockChangeCondition = true;
             if (!showAll) {
-                const currentStock = parseFloat(product.inputElement.value);
+                // Now, product.inputElement.value should hold the *latest* value (due to Step 0)
+                const currentStock = product.inputElement ? parseFloat(product.inputElement.value) : NaN;
                 const originalStock = parseFloat(product.originalStock);
-                // Compare values, consider blank/NaN as different from 0 or existing
                 stockChangeCondition = isNaN(currentStock) || isNaN(originalStock) || (currentStock !== originalStock);
             }
 
@@ -223,8 +269,16 @@ document.addEventListener('DOMContentLoaded', function() {
         });
         console.log("DEBUG: Filtered products count:", filteredProducts.length);
 
-        // Clear existing display
-        productListDisplay.innerHTML = '';
+        productListDisplay.innerHTML = ''; // Clear existing display
+
+        if (filteredProducts.length === 0) {
+            const noProductsMessage = document.createElement('p');
+            noProductsMessage.className = 'text-muted text-center mt-4';
+            noProductsMessage.textContent = 'No products found matching your criteria.';
+            productListDisplay.appendChild(noProductsMessage);
+            console.log("DEBUG: Displaying 'No products found' message.");
+            return;
+        }
 
         let newGroupedProducts = {};
 
@@ -244,66 +298,67 @@ document.addEventListener('DOMContentLoaded', function() {
         }
         console.log("DEBUG: New grouped products structure:", newGroupedProducts);
 
-        if (Object.keys(newGroupedProducts).length === 0) {
-            const noProductsMessage = document.createElement('p');
-            noProductsMessage.className = 'text-muted text-center mt-4';
-            noProductsMessage.textContent = 'No products found matching your criteria.';
-            productListDisplay.appendChild(noProductsMessage);
-        } else {
-            Object.keys(newGroupedProducts).forEach(groupName => {
-                const productsInGroup = newGroupedProducts[groupName];
-                console.log(`DEBUG: Rendering group: "${groupName}" with ${productsInGroup.length} products.`);
+        Object.keys(newGroupedProducts).forEach(groupName => {
+            const productsInGroup = newGroupedProducts[groupName];
+            console.log(`DEBUG: Rendering group: "${groupName}" with ${productsInGroup.length} products.`);
 
-                const header = document.createElement('h5');
-                header.className = 'mt-4 mb-2 product-group-header';
-                header.textContent = `${groupName} (${productsInGroup.length} items)`;
-                productListDisplay.appendChild(header);
+            const header = document.createElement('h5');
+            header.className = 'mt-4 mb-2 product-group-header';
+            header.textContent = `${groupName} (${productsInGroup.length} items)`;
+            productListDisplay.appendChild(header);
 
-                const tableResponsiveDiv = document.createElement('div');
-                tableResponsiveDiv.className = 'table-responsive mb-4 product-group-table';
-                
-                // Create a table specific for this group
-                const table = document.createElement('table');
-                table.className = 'table table-striped table-hover align-middle';
-                table.id = `setStockTable-${groupName.replace(/\s+/g, '-')}`;
-                table.innerHTML = `
-                    <thead class="table-dark">
-                        <tr>
-                            <th>Product Name</th>
-                            <th>Product #</th>
-                            <th>Type</th>
-                            <th>Unit</th>
-                            <th style="width: 25%;">Current BOD / New Stock</th>
-                        </tr>
-                    </thead>
-                    <tbody></tbody>
-                `;
-                const tbody = table.querySelector('tbody');
-                
-                productsInGroup.forEach(product => {
-                    // Re-append the original row from the template (or a copy if modifying elements)
-                    const rowElement = product.element.querySelector('tr[data-product-id]'); // Get the <tr> from the template div
-                    if (rowElement) {
-                        tbody.appendChild(rowElement.cloneNode(true)); // Append a clone
+            const tableResponsiveDiv = document.createElement('div');
+            tableResponsiveDiv.className = 'table-responsive mb-4 product-group-table';
+            
+            const table = document.createElement('table');
+            table.className = 'table table-striped table-hover align-middle';
+            table.id = `setStockTable-${groupName.replace(/\s+/g, '-')}`;
+            table.innerHTML = `
+                <thead class="table-dark">
+                    <tr>
+                        <th>Product Name</th>
+                        <th>Product #</th>
+                        <th>Type</th>
+                        <th>Unit</th>
+                        <th style="width: 25%;">Current BOD / New Stock</th>
+                    </tr>
+                </thead>
+                <tbody></tbody>
+            `;
+            const tbody = table.querySelector('tbody');
+            
+            productsInGroup.forEach(product => {
+                const rowElement = product.element.querySelector('tr[data-product-id]'); 
+                if (rowElement) {
+                    const clonedRow = rowElement.cloneNode(true);
+                    const clonedInput = clonedRow.querySelector('.stock-input');
+                    
+                    // Here, product.inputElement.value should contain the correct, last-typed value
+                    // because we updated it in Step 0.
+                    if (clonedInput && product.inputElement) {
+                        clonedInput.value = product.inputElement.value;
                     }
-                });
-                tableResponsiveDiv.appendChild(table);
-                productListDisplay.appendChild(tableResponsiveDiv);
+                    tbody.appendChild(clonedRow);
+                } else {
+                    console.warn(`DEBUG: Could not find <tr> element for product ID: ${product.id} within its original template. Skipping.`);
+                }
             });
-        }
+            tableResponsiveDiv.appendChild(table);
+            productListDisplay.appendChild(tableResponsiveDiv);
+        });
         console.log("DEBUG: applyFiltersAndGrouping finished rendering.");
     }
 
-    // Event Listeners for filters
-    searchInput.addEventListener('keyup', applyFiltersAndGrouping);
+    const debouncedApplyFiltersAndGrouping = debounce(applyFiltersAndGrouping, 300); // 300ms delay
+
+    searchInput.addEventListener('keyup', debouncedApplyFiltersAndGrouping);
     typeFilterSelect.addEventListener('change', applyFiltersAndGrouping);
     groupBySelect.addEventListener('change', applyFiltersAndGrouping);
     showAllProductsCheckbox.addEventListener('change', applyFiltersAndGrouping);
     
-    // Add event listeners for input changes to all stock inputs dynamically
     productListDisplay.addEventListener('input', function(event) {
         if (event.target.classList.contains('stock-input')) {
-            applyFiltersAndGrouping(); // Re-apply filters if a stock value changes (for "show only changed")
+            debouncedApplyFiltersAndGrouping(); 
         }
     });
 
@@ -312,20 +367,25 @@ document.addEventListener('DOMContentLoaded', function() {
         typeFilterSelect.value = 'all';
         groupBySelect.value = 'none';
         showAllProductsCheckbox.checked = true;
-        applyFiltersAndGrouping();
+        applyFiltersAndGrouping(); 
     });
 
-    // Handle initial search query from URL (if linking from products page)
-    const urlParams = new URLSearchParams(window.location.search);
-    const initialSearchQuery = urlParams.get('search_query');
-    if (initialSearchQuery) {
-        searchInput.value = initialSearchQuery;
-        // Expand the filter section if a search query was applied
-        if (stockViewOptionsCollapseElement && !stockViewOptionsCollapseElement.classList.contains('show')) {
-            new bootstrap.Collapse(stockViewOptionsCollapseElement, { toggle: true });
+    function flashMessage(message, category) {
+        const flashContainer = document.getElementById('flash-messages-container');
+        if (flashContainer) {
+            flashContainer.innerHTML = ''; 
+            const alertDiv = document.createElement('div');
+            alertDiv.className = `alert alert-${category} alert-dismissible fade show`;
+            alertDiv.setAttribute('role', 'alert');
+            alertDiv.innerHTML = `
+                ${message}
+                <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+            `;
+            flashContainer.appendChild(alertDiv);
+        } else {
+            console.warn("Flash message container #flash-messages-container not found. Message:", message, category);
         }
     }
-
 
     const stockCsvFileInput = document.getElementById('stock_csv_file');
     const uploadCsvBtn = document.getElementById('upload-csv-btn');
@@ -346,15 +406,14 @@ document.addEventListener('DOMContentLoaded', function() {
             
             let productColumnIndex = -1;
             let quantityColumnIndex = -1;
-            let itemNumberColumnIndex = 4; // Assuming Product # is often in column E (index 4)
+            let itemNumberColumnIndex = 4; 
 
             const productsByName = {};
             const productsByNumber = {};
 
             allProductRowsData.forEach(product => {
-                // Use .name.toLowerCase() for key
-                if (product.name) productsByName[product.name] = product;
-                if (product.number) productsByNumber[product.number] = product;
+                if (product.name) productsByName[product.name.toLowerCase()] = product;
+                if (product.number) productsByNumber[product.number.toLowerCase()] = product;
             });
             console.log("DEBUG (Local Products by Name for CSV Matching):", productsByName);
             console.log("DEBUG (Local Products by Number for CSV Matching):", productsByNumber);
@@ -380,12 +439,11 @@ document.addEventListener('DOMContentLoaded', function() {
                         return;
                     }
 
-                    // --- Header Detection Phase ---
                     if (headerSearchPhase) {
                         currentCsvRowIndex++;
 
                         if (!itemsHeaderRowFound) {
-                            const itemsIdx = cellValues.findIndex(cell => typeof cell === 'string' && cell.trim() === 'Items');
+                            const itemsIdx = cellValues.findIndex(cell => typeof cell === 'string' && cell.trim().toLowerCase() === 'items');
                             if (itemsIdx !== -1) {
                                 productColumnIndex = itemsIdx;
                                 itemsHeaderRowFound = true;
@@ -394,7 +452,7 @@ document.addEventListener('DOMContentLoaded', function() {
                         }
 
                         if (!quantityHeaderRowFound) {
-                            const quantityIdx = cellValues.findIndex(cell => typeof cell === 'string' && cell.trim().toLowerCase().includes('quantity') || (typeof cell === 'string' && cell.trim().toLowerCase() === 'stock'));
+                            const quantityIdx = cellValues.findIndex(cell => typeof cell === 'string' && (cell.trim().toLowerCase().includes('quantity') || cell.trim().toLowerCase() === 'stock'));
                             if (quantityIdx !== -1) {
                                 quantityColumnIndex = quantityIdx;
                                 quantityHeaderRowFound = true;
@@ -402,16 +460,13 @@ document.addEventListener('DOMContentLoaded', function() {
                             }
                         }
                         
-                        // itemNumberColumnIndex is static at 4 (column E)
-                        // If productColumnIndex or quantityColumnIndex is still -1 after checking, and we've checked a few rows, consider it an error.
-
                         if (itemsHeaderRowFound && quantityHeaderRowFound) {
                             headerSearchPhase = false;
                             
                             const maxIndexNeeded = Math.max(productColumnIndex, quantityColumnIndex, itemNumberColumnIndex);
                             if (cellValues.length <= maxIndexNeeded) {
                                 console.error(`DEBUG (Header Detection Error): Not enough columns in header row. cellValues.length: ${cellValues.length}, Expected max index: ${maxIndexNeeded}`);
-                                flashMessage('CSV header detected, but crucial data columns are missing or misplaced. Please check CSV format.', 'danger');
+                                flashMessage('CSV header detected, but crucial data columns are missing or misplaced. Please check CSV format. (Expected columns at least up to index ' + maxIndexNeeded + ')', 'danger');
                                 hasFatalError = true;
                                 parser.abort();
                                 return;
@@ -422,7 +477,7 @@ document.addEventListener('DOMContentLoaded', function() {
                             return;
                         }
 
-                        if (currentCsvRowIndex > 20) { // Limit header search to first 20 rows
+                        if (currentCsvRowIndex > 20) { 
                             flashMessage('Header rows matching "Items" and "Quantity/Stock" were not found after searching the first 20 rows. Please check CSV format.', 'danger');
                             hasFatalError = true;
                             parser.abort();
@@ -432,7 +487,6 @@ document.addEventListener('DOMContentLoaded', function() {
                         return;
                     }
 
-                    // --- Data Row Processing (after header search phase is complete) ---
                     if (!headerSearchPhase) {
                         const maxIndexNeeded = Math.max(productColumnIndex, quantityColumnIndex, itemNumberColumnIndex);
                         if (cellValues.length <= maxIndexNeeded) {
@@ -450,7 +504,6 @@ document.addEventListener('DOMContentLoaded', function() {
 
                         console.log(`DEBUG (CSV Data Row for Processing): Product Name: "${rawProductName}", Item Number: "${rawItemNumber}", Quantity: "${rawQuantity}"`);
 
-                        // Basic filtering for irrelevant rows (can be expanded)
                         if (productNameFromCsv.startsWith("tax:") || productNameFromCsv.startsWith("total:") || productNameFromCsv.includes("deposit") || productNameFromCsv.includes("page:")) {
                             console.log(`DEBUG (Skipped Irrelevant Row - Content Filter): "${rawProductName}"`);
                             stocksSkippedCount++;
@@ -487,15 +540,14 @@ document.addEventListener('DOMContentLoaded', function() {
                             console.warn(`DEBUG (No Match Found OR Input Element Missing): CSV Product '${rawProductName}' (Item #: '${rawItemNumber}') not found in table or input element is missing. Matched Product:`, matchedProduct);
                             stocksSkippedCount++;
                         }
-                        // Re-apply filters to update the view, especially for "show only changed"
-                        applyFiltersAndGrouping();
+                        debouncedApplyFiltersAndGrouping(); 
                     }
                 },
                 complete: function() {
                     if (!hasFatalError) {
                         flashMessage(`Successfully pre-filled stock for ${stocksUpdatedCount} products. ${stocksSkippedCount} products skipped (not found, invalid quantity, or irrelevant row).`, 'success');
                     }
-                    applyFiltersAndGrouping(); // Final refresh
+                    applyFiltersAndGrouping(); // Final refresh, direct call
                 },
                 error: function(err, file, inputElem, reason) {
                     console.error("PapaParse error (full):", err, reason);
@@ -508,20 +560,16 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
 
-    // Initial load/filter application
     applyFiltersAndGrouping();
 
-    // Pre-fill search if coming from 'Set Stock' button on products page
-    // This part should execute after applyFiltersAndGrouping for correct behavior
     const urlParams = new URLSearchParams(window.location.search);
-    const initialSearchQueryFromUrl = urlParams.get('search_query');
-    if (initialSearchQueryFromUrl) {
-        searchInput.value = initialSearchQueryFromUrl;
-        // Expand the filter section if a search query was applied
+    const initialSearchQuery = urlParams.get('search_query');
+    if (initialSearchQuery) {
+        searchInput.value = initialSearchQuery;
         if (stockViewOptionsCollapseElement && !stockViewOptionsCollapseElement.classList.contains('show')) {
             new bootstrap.Collapse(stockViewOptionsCollapseElement, { toggle: true });
         }
-        applyFiltersAndGrouping(); // Re-apply filters with the initial search query
+        applyFiltersAndGrouping(); // Direct call with initial query
     }
 });
 </script>

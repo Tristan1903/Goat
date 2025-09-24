@@ -2,6 +2,29 @@
 {% block title %}{{ title }}{% endblock %}
 
 {% block content %}
+<style>
+    /* CSS for sticky table headers within tables */
+    .table-responsive > .table > thead > tr > th {
+        position: sticky;
+        /* IMPORTANT: You MUST adjust this 'top' value.
+           Measure the exact height of your fixed/sticky main navbar in pixels.
+           Set 'top' to that height. If you want a gap between the navbar
+           and the sticky header, add the desired gap to the navbar's height.
+           
+           Example: If your navbar is 56px tall and you want a 10px gap below it, set 'top: 66px;'.
+           The current value of 71px is a common Bootstrap fixed-top navbar height,
+           but it might differ in your specific theme or customizations.
+        */
+        top: 71px; /* <--- ADJUST THIS VALUE BASED ON YOUR NAVBAR'S HEIGHT + DESIRED GAP */
+        z-index: 10; /* Ensure it stays on top of other scrolling content */
+        background-color: #343a40; /* Dark background from table-dark */
+        color: white; /* Text color from table-dark */
+        /* Optional: Add borders for better visual separation */
+        border-bottom: 1px solid #dee2e6;
+        border-top: 1px solid #dee2e6;
+    }
+</style>
+
 <div class="container-fluid mt-4">
   <div class="card shadow-sm">
     <div class="card-body p-4 p-md-5">
@@ -9,24 +32,66 @@
 
       <div class="d-flex align-items-center mb-3 scheduler-role-buttons">
         <div class="btn-group" role="group" aria-label="Scheduler role quick links">
-          <a href="{{ url_for('scheduler_bartenders') }}"
+          <a href="{{ url_for('scheduler_bartenders', week_offset=current_week_offset) }}"
              class="btn {% if role_name == 'bartender' %}btn-primary{% else %}btn-outline-primary{% endif %}">Bartenders</a>
-          <a href="{{ url_for('scheduler_waiters') }}"
+          <a href="{{ url_for('scheduler_waiters', week_offset=current_week_offset) }}"
              class="btn {% if role_name == 'waiter' %}btn-primary{% else %}btn-outline-primary{% endif %}">Waiters</a>
-          <a href="{{ url_for('scheduler_skullers') }}"
+          <a href="{{ url_for('scheduler_skullers', week_offset=current_week_offset) }}"
              class="btn {% if role_name == 'skullers' %}btn-primary{% else %}btn-outline-primary{% endif %}">Skullers</a>
-          <a href="{{ url_for('scheduler_managers') }}"
+          <a href="{{ url_for('scheduler_managers', week_offset=current_week_offset) }}"
              class="btn {% if role_name == 'manager' %}btn-primary{% else %}btn-outline-primary{% endif %}">Managers</a>
         </div>
-        <a href="{{ url_for('manage_required_staff', role_name=role_name) }}" class="btn btn-outline-info ms-3">
+        <a href="{{ url_for('manage_required_staff', role_name=role_name, week_offset=current_week_offset) }}" class="btn btn-outline-info ms-3">
             <i class="fas fa-cog me-2"></i>Manage Staff Minimums
         </a>
-        <a href="{{ url_for('export_schedule_for_role', role_name=role_name) }}" class="btn btn-outline-secondary ms-2">
+        <a href="{{ url_for('export_schedule_for_role', role_name=role_name, week_offset=current_week_offset) }}" class="btn btn-outline-secondary ms-2">
             <i class="fas fa-file-csv me-2"></i>Export to CSV
         </a>
       </div>
 
       <p class="text-muted mb-4">Assign staff for the week starting {{ week_dates[0].strftime('%A, %b %d') }}. Columns: Tue → Sun.</p>
+
+      {# NEW: Week Navigation Buttons #}
+      <div class="d-flex justify-content-between mb-3 flex-wrap gap-2">
+          <a href="{{ url_for('scheduler_' + role_name + 's', week_offset=current_week_offset - 1) }}" class="btn btn-secondary flex-grow-1 flex-md-grow-0">
+              <i class="fas fa-chevron-left me-2"></i> Previous Week
+          </a>
+          <span class="btn btn-light fw-bold flex-grow-1 flex-md-grow-0 disabled">
+              Week {% if current_week_offset == 0 %}Current{% elif current_week_offset > 0 %}Next{% else %}Previous{% endif %} ({{ week_dates[0].strftime('%b %d') }} - {{ week_dates[-1].strftime('%b %d') }})
+          </span>
+          <a href="{{ url_for('scheduler_' + role_name + 's', week_offset=current_week_offset + 1) }}" class="btn btn-secondary flex-grow-1 flex-md-grow-0">
+              Next Week <i class="fas fa-chevron-right ms-2"></i>
+          </a>
+      </div>
+
+      {# NEW: Collapsible Card for Submitted Users #}
+      <div class="card shadow-sm mb-4">
+          <div class="card-header p-0" id="submittedUsersHeading">
+              <button class="btn btn-link w-100 text-start text-decoration-none d-flex justify-content-between align-items-center py-2 px-3" type="button" data-bs-toggle="collapse" data-bs-target="#submittedUsersCollapse" aria-expanded="false" aria-controls="submittedUsersCollapse">
+                  <h5 class="mb-0 text-dark">
+                      Users Who Have Submitted Availability This Week ({{ submitted_users_for_week|length }})
+                  </h5> 
+                  <i class="fas fa-chevron-down collapse-icon"></i>
+              </button>
+          </div>
+          <div id="submittedUsersCollapse" class="collapse" aria-labelledby="submittedUsersHeading">
+              <div class="card-body">
+                  {% if submitted_users_for_week %}
+                      <ul class="list-unstyled row row-cols-1 row-cols-sm-2 row-cols-md-3 row-cols-lg-4 g-2 mb-0">
+                          {% for user_data in submitted_users_for_week %}
+                              <li class="col">
+                                  <span class="badge bg-success me-1"><i class="fas fa-check-circle"></i></span> {{ user_data.full_name }}
+                              </li>
+                          {% endfor %}
+                      </ul>
+                  {% else %}
+                      <p class="text-muted mb-0">No users have submitted their availability for this week yet.</p>
+                  {% endif %}
+              </div>
+          </div>
+      </div>
+      {# END NEW: Collapsible Card for Submitted Users #}
+
 
       {# Collapsible Shift Time Rules for the current scheduling role #}
       {% set current_role_shift_defs = role_shift_definitions.get(role_name, role_shift_definitions.get('manager')) %}
@@ -99,13 +164,14 @@
                       {% set availability = user_availability.get(user.id, {}).get(day, []) %}
                       {% set current_assignment = assignments.get(day, {}).get(user.id) %}
                       <td>
-                          {% if availability %}
-                              <div class="mb-2">
+                          <div class="mb-2 shift-glow-container 
+                                      {% if availability %}has-availability-glow{% else %}no-availability-glow{% endif %}">
+                              {% if availability %}
                                   Submitted: <strong>{{ availability|join(', ') }}</strong>
-                              </div>
-                          {% else %}
-                              <div class="mb-2 text-muted">No submission</div>
-                          {% endif %}
+                              {% else %}
+                                  <div class="text-muted">No submission</div>
+                              {% endif %}
+                          </div>
 
                           <div class="assign-controls">
                               <select name="assignment_{{ day_iso }}_{{ user.id }}"
@@ -200,13 +266,14 @@
                     </div>
                   {% endif %}
                   
-                  {% if availability %}
-                    <div class="mb-2">
-                      <small>Submitted: <strong>{{ availability|join(', ') }}</strong></small>
-                    </div>
-                  {% else %}
-                    <div class="mb-2 text-muted small">No submission</div>
-                  {% endif %}
+                  <div class="mb-2 small shift-glow-container 
+                              {% if availability %}has-availability-glow{% else %}no-availability-glow{% endif %}">
+                    {% if availability %}
+                      Submitted: <strong>{{ availability|join(', ') }}</strong>
+                    {% else %}
+                      <div class="text-muted">No submission</div>
+                    {% endif %}
+                  </div>
 
                   <div class="assign-controls mb-2">
                     <select name="assignment_{{ day_iso }}_{{ user.id }}"
@@ -442,7 +509,7 @@ document.addEventListener('DOMContentLoaded', function() {
         if (startTimeHiddenInput) startTimeHiddenInput.value = startTime;
         if (endTimeHiddenInput) endTimeHiddenInput.value = endTime;
         
-        customShiftTimeInputModal.hide();
+customShiftTimeInputModal.hide();
     });
 
     // Clear modal inputs and reset state when modal is hidden
