@@ -423,9 +423,17 @@ class _ConsolidatedScheduleScreenState extends State<ConsolidatedScheduleScreen>
                                                 crossAxisAlignment: CrossAxisAlignment.start,
                                                 children: [
                                                   if (shiftsOnDay.isEmpty)
-                                                    Text(
-                                                      'OFF',
-                                                      style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Colors.white70), // Lighter OFF
+                                                    Container(
+                                                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                                      decoration: BoxDecoration(
+                                                        color: Colors.red.withOpacity(0.1),
+                                                        borderRadius: BorderRadius.circular(4),
+                                                        border: Border.all(color: Colors.red.withOpacity(0.3)),
+                                                      ),
+                                                      child: Text(
+                                                        'OFF',
+                                                        style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Colors.red.shade400),
+                                                      ),
                                                     )
                                                   else
                                                     ...shiftsOnDay.map((shift) {
@@ -436,11 +444,19 @@ class _ConsolidatedScheduleScreenState extends State<ConsolidatedScheduleScreen>
                                                         customStart: shift.startTimeStr,
                                                         customEnd: shift.endTimeStr,
                                                       );
-                                                      return Text(
-                                                        '${shift.shiftType} $timeDisplay',
-                                                        style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Color.fromRGBO(65, 65, 65, 1)), // Bright blue text
-                                                        overflow: TextOverflow.ellipsis, // <--- Apply overflow here
-                                                        maxLines: 2, // Allow two lines before ellipsis
+                                                      return Container(
+                                                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                                        decoration: BoxDecoration(
+                                                          color: Colors.green.withOpacity(0.1),
+                                                          borderRadius: BorderRadius.circular(4),
+                                                          border: Border.all(color: Colors.green.withOpacity(0.3)),
+                                                        ),
+                                                        child: Text(
+                                                          '${shift.shiftType} $timeDisplay',
+                                                          style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Colors.green.shade400),
+                                                          overflow: TextOverflow.ellipsis,
+                                                          maxLines: 2,
+                                                        ),
                                                       );
                                                     }).toList(),
                                                   // TODO: Add on-leave indicator here if needed (from ScheduleItem)

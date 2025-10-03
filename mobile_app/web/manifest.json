@@ -1,7 +1,7 @@
 {
     "name": "mobile_app",
     "short_name": "mobile_app",
-    "start_url": "/index.html",
+    "start_url": "/static/web/",
     "display": "standalone",
     "background_color": "#0175C2",
     "theme_color": "#0175C2",
@@ -9,31 +9,14 @@
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
 
-    "screenshots": [
-      {
-        "src": "screenshot-wide.png",  
-        "sizes": "1920x1080",          
-        "type": "image/png",
-        "form_factor": "wide",         
-        "label": "Desktop View"       
-      },
-      {
-        "src": "screenshot-narrow.png", 
-        "sizes": "720x1280",           
-        "type": "image/png",
-        "form_factor": "narrow",     
-        "label": "Mobile View"
-      }
-    ],
-
     "icons": [
         {
-            "src": "icons/Icon-192.png",
+            "src": "icons/app_icon_192.png",
             "sizes": "192x192",
             "type": "image/png"
         },
         {
-            "src": "icons/Icon-512.png",
+            "src": "icons/app_icon_512.png",
             "sizes": "512x512",
             "type": "image/png"
         },

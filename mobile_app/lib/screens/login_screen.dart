@@ -73,7 +73,7 @@ Widget build(BuildContext context) {
               maxWidth: 400, // Max width for login card
             ),
             child: Card(
-              color: const Color(0xFF283848), // Slightly lighter dark blue-grey for the login card (custom for this screen)
+              color: const Color.fromRGBO(48, 12, 16, 1), // Slightly lighter dark blue-grey for the login card (custom for this screen)
               elevation: 8,
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(16.0),

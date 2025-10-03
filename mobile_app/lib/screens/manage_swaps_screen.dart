@@ -1,5 +1,6 @@
 // mobile_app/lib/screens/manage_swaps_screen.dart
 import 'package:flutter/material.dart';
+import 'package:mobile_app/utils/string_extensions.dart';
 import 'package:provider/provider.dart';
 import 'package:intl/intl.dart';
 import '../providers/schedule_provider.dart';
@@ -196,6 +197,7 @@ class _ManageSwapsScreenState extends State<ManageSwapsScreen> {
                                   fontWeight: FontWeight.bold,
                                 ),
                               ),
+                              Text('Shift: ${swap.assignedShift} on ${swap.formattedShiftDate} (${swap.swapPart.toTitleCase()} Part)'),
                               Text(
                                 'Shift: ${swap.assignedShift} on ${swap.formattedShiftDate}',
                               ),
@@ -310,9 +312,7 @@ class _ManageSwapsScreenState extends State<ManageSwapsScreen> {
                             Icons.swap_horiz,
                             color: history.statusColor,
                           ),
-                          title: Text(
-                            '${history.requesterFullName} swapped ${history.assignedShift} on ${history.formattedShiftDate}',
-                          ),
+                          title: Text('${history.requesterFullName} swapped ${history.assignedShift} on ${history.formattedShiftDate} (${history.swapPart.toTitleCase()} Part)'),
                           subtitle: Text(
                             'Covered by: ${history.covererFullName ?? 'N/A'}',
                           ),

@@ -1,12 +1,12 @@
 from flask import jsonify, request, current_app
 from backend.api import mobile_api_bp
 
-from backend.models import (db, User, Location, Product, Role, BeginningOfDay, Count,
-                            Announcement, ActivityLog, RecountRequest, Sale, Delivery, Recipe, RecipeIngredient, CocktailsSold,
-                            LeaveRequest, VarianceExplanation, UserFCMToken, ShiftSubmission, Schedule, RequiredStaff, ShiftSwapRequest, VolunteeredShift,
-                            Warning, Booking)
+from ..utils import (get_drive_service, upload_file_to_drive, append_eod_data_to_google_sheet,
+                    send_onesignal_notification, # <--- NEW: send_onesignal_notification from utils
+                    SCHEDULER_SHIFT_TYPES_GENERIC, ROLE_SHIFT_DEFINITIONS,
+                    get_role_specific_shift_types, get_shift_time_display,
+                    _build_week_dates)
 
-from firebase_admin import messaging
 
 from flask_jwt_extended import jwt_required, get_jwt_identity, create_access_token
 
@@ -21,9 +21,9 @@ import os
 from sqlalchemy import distinct, func, or_
 
 from ..utils import (get_drive_service, upload_file_to_drive, append_eod_data_to_google_sheet,
-                     get_role_specific_shift_types, get_shift_time_display,
-                     SCHEDULER_SHIFT_TYPES_GENERIC, ROLE_SHIFT_DEFINITIONS,
-                     MANUAL_CONTENT)
+                 SCHEDULER_SHIFT_TYPES_GENERIC, ROLE_SHIFT_DEFINITIONS,
+                 get_role_specific_shift_types, get_shift_time_display,
+                 _build_week_dates)
 
 def _build_week_dates_api(week_offset=0):
     """
@@ -34,10 +34,10 @@ def _build_week_dates_api(week_offset=0):
     today = datetime.now(timezone.utc).date()
     days_since_monday = today.weekday()
     start_of_current_week = today - timedelta(days=days_since_monday)
-    
+
     # Adjust start_of_week by week_offset
     start_of_offset_week = start_of_current_week + timedelta(weeks=week_offset)
-    
+
     week_dates = [start_of_offset_week + timedelta(days=i) for i in range(7)]
     end_of_week = week_dates[-1]
 
@@ -196,11 +196,11 @@ def create_role_required_api_decorator():
 
                 if not user:
                     return jsonify({"msg": "User not found"}), 404
-                
+
                 user_role_names = [r.name for r in user.roles]
                 if not any(role_name in user_role_names for role_name in role_names):
                     return jsonify({"msg": "Access Denied: Insufficient permissions"}), 403
-                
+
                 return fn(*args, **kwargs)
             return decorated_view
         return wrapper
@@ -232,7 +232,7 @@ def protected():
     user = User.query.get(current_user_id)
     if not user:
         return jsonify({"msg": "User not found"}), 404
-    
+
     user_roles = [r.name for r in user.roles]
 
     return jsonify(
@@ -267,7 +267,7 @@ def get_user_profile():
 @role_required_api(['bartender', 'waiter', 'skullers', 'manager', 'general_manager', 'system_admin'])
 def get_locations():
     locations = Location.query.order_by(Location.name).all()
-    
+
     locations_data = []
     for loc in locations:
         locations_data.append({
@@ -307,7 +307,7 @@ def get_bod_for_today():
     Returns the Beginning of Day (BOD) stock for all products for the current day.
     """
     today_date = datetime.utcnow().date()
-    
+
     # We'll get all products first to ensure we return a comprehensive list,
     # even for those without a BOD entry (will show 0).
     all_products = Product.query.order_by(Product.name).all()
@@ -323,7 +323,7 @@ def get_bod_for_today():
             "unit_of_measure": product.unit_of_measure,
             "bod_amount": bod_map.get(product.id, 0.0) # Default to 0.0 if no BOD entry
         })
-    
+
     return jsonify(response_data), 200
 
 @mobile_api_bp.route('/submit_count', methods=['POST'])
@@ -354,8 +354,8 @@ def submit_count():
     # Fetch expected_amounts and deliveries for variance calculation
     today_date = datetime.utcnow().date()
     yesterday = today_date - datetime.timedelta(days=1)
-    
-    
+
+
     bod_for_today_map = {
         b.product_id: b.amount
         for b in BeginningOfDay.query.filter_by(date=today_date).all()
@@ -364,17 +364,17 @@ def submit_count():
         d.product_id: d.quantity
         for d in Delivery.query.filter_by(delivery_date=today_date).all()
     }
-    
+
     new_count_entries = []
-    
+
     for product_data in products_to_count:
         product_id = product_data.get('product_id')
         amount = product_data.get('amount')
         comment = product_data.get('comment')
-        
+
         if product_id is None or amount is None:
             return jsonify({"msg": f"Missing product_id or amount for a product entry: {product_data}"}), 400
-        
+
         product_obj = Product.query.get(product_id)
         if not product_obj:
             return jsonify({"msg": f"Product with ID {product_id} not found"}), 404
@@ -412,7 +412,7 @@ def submit_count():
             variance_amount=variance_amount
         )
         new_count_entries.append(new_count)
-    
+
     try:
         db.session.add_all(new_count_entries)
         db.session.commit()
@@ -478,7 +478,7 @@ def get_location_count_statuses():
     Also indicates if BOD for today has been submitted.
     """
     today_date = datetime.utcnow().date()
-    
+
     # Check if BOD for today has been submitted (important for enabling counts)
     bod_submitted_for_today = BeginningOfDay.query.filter_by(date=today_date).first() is not None
 
@@ -494,14 +494,14 @@ def get_location_count_statuses():
         status = 'not_started'
         if latest_count_for_location:
             status = 'corrected' if latest_count_for_location.count_type == 'Corrections Count' else 'counted'
-        
+
         location_statuses_data.append({
             "id": loc.id,
             "name": loc.name,
             "slug": loc.name.replace(' ', '_').lower(),
             "status": status, # 'not_started', 'counted', 'corrected'
         })
-    
+
     return jsonify({
         "bod_submitted_for_today": bod_submitted_for_today,
         "location_statuses": location_statuses_data
@@ -561,7 +561,7 @@ def get_dashboard_summary():
         # Assuming previous day's sales are settled before today's BOD is calculated/used.
         # This mirrors the `daily_summary` logic
         sales_counts_yesterday = {s.product_id: s.quantity_sold for s in Sale.query.filter_by(date=yesterday).all()}
-        
+
         # Fetch today's deliveries
         todays_deliveries = {d.product_id: d.quantity for d in Delivery.query.filter_by(delivery_date=today_date).all()}
 
@@ -569,9 +569,9 @@ def get_dashboard_summary():
         # For simplicity for this mobile API, let's assume cocktail usage is part of previous day's sales settling.
         # If detailed real-time usage is needed for *today*, you'd need `_calculate_ingredient_usage_from_cocktails_sold`
         # helper to be available and callable from here.
-        
+
         # For now, let's simplify to only compare with BOD and deliveries for current variance
-        
+
         products = Product.query.all()
         eod_latest_count_objects = {} # {product_id: Count_object}
         all_counts_on_today = Count.query.filter(db.func.date(Count.timestamp) == today_date).all()
@@ -579,18 +579,18 @@ def get_dashboard_summary():
             product_id = count.product_id
             if product_id not in eod_latest_count_objects or count.timestamp > eod_latest_count_objects[product_id].timestamp:
                 eod_latest_count_objects[product_id] = count
-        
+
         variance_alerts = []
         for product in products:
             bod = bod_counts.get(product.id, 0.0)
             deliveries = todays_deliveries.get(product.id, 0.0)
-            
+
             # Simplified expected EOD for mobile context (BOD + Deliveries)
             # Full web app dashboard factors in sales of the day, but mobile might not need that real-time for an "alert"
             expected_amount_available = bod + deliveries
 
             latest_count_obj = eod_latest_count_objects.get(product.id)
-            
+
             variance_val = None
             if latest_count_obj and latest_count_obj.variance_amount is not None:
                 variance_val = latest_count_obj.variance_amount
@@ -663,8 +663,8 @@ def get_dashboard_summary():
                     'requester_full_name': v_shift.requester.full_name,
                     'relinquish_reason': v_shift.relinquish_reason
                 })
-    
-    return jsonify(summary_data), 200 
+
+    return jsonify(summary_data), 200
 
 @mobile_api_bp.route('/submit_bod_stock', methods=['POST'])
 @jwt_required()
@@ -720,7 +720,7 @@ def submit_bod_stock():
             )
             db.session.add(new_bod)
             new_count += 1
-    
+
     if errors:
         db.session.rollback() # Rollback all changes if any error occurred
         return jsonify({"msg": "Errors occurred during submission.", "details": errors}), 400
@@ -748,7 +748,7 @@ def request_recount():
     data = request.json
     product_id = data.get('product_id')
     location_id = data.get('location_id')
-    
+
     if not product_id and not location_id:
         return jsonify({"msg": "Must specify either product_id OR location_id for a recount."}), 400
     if product_id and location_id:
@@ -756,7 +756,7 @@ def request_recount():
 
     target_obj_name = ""
     target_type = ""
-    
+
     if product_id:
         product = Product.query.get(product_id)
         if not product:
@@ -855,7 +855,7 @@ def submit_sales():
 
         if product_id is None or quantity_sold is None:
             return jsonify({"msg": f"Missing product_id or quantity_sold in manual product sales item: {item}"}), 400
-        
+
         try:
             quantity_sold = float(quantity_sold)
             if quantity_sold < 0:
@@ -866,7 +866,7 @@ def submit_sales():
         product_obj = Product.query.get(product_id)
         if not product_obj:
             return jsonify({"msg": f"Product with ID {product_id} not found."}), 404
-        
+
         new_sale = Sale(product_id=product_id, quantity_sold=quantity_sold, date=sales_date)
         db.session.add(new_sale)
 
@@ -881,7 +881,7 @@ def submit_sales():
 
         if recipe_id is None or quantity_sold is None:
             return jsonify({"msg": f"Missing recipe_id or quantity_sold in cocktail sales item: {item}"}), 400
-        
+
         try:
             quantity_sold = int(quantity_sold)
             if quantity_sold < 0:
@@ -931,7 +931,7 @@ def submit_delivery():
             return jsonify({"msg": "Quantity for delivery must be positive."}), 400
     except ValueError:
         return jsonify({"msg": "Invalid quantity for delivery."}), 400
-    
+
     try:
         delivery_date = datetime.strptime(delivery_date_str, '%Y-%m-%d').date()
     except ValueError:
@@ -1022,7 +1022,7 @@ def get_latest_counts_for_location(location_id):
 
     # Fetch all latest counts for each product in this location for today
     # This involves a subquery or a CTE to get the latest timestamp per product_id/location_name
-    
+
     # Simpler approach: Fetch all counts for the day/location, then group in Python
     all_counts_today_for_location = Count.query.filter(
         Count.location == location.name,
@@ -1046,7 +1046,7 @@ def get_latest_counts_for_location(location_id):
             "user_id": count_obj.user_id,
             "timestamp": count_obj.timestamp.isoformat()
         })
-    
+
     return jsonify(counts_data), 200
 
 @mobile_api_bp.route('/leave_requests', methods=['GET'])
@@ -1110,7 +1110,7 @@ def submit_leave_request():
         end_date = datetime.strptime(end_date_str, '%Y-%m-%d').date()
     except ValueError:
         return jsonify({"msg": "Invalid date format. Use YYYY-MM-DD."}), 400
-    
+
     if start_date > end_date:
         return jsonify({"msg": "Start date cannot be after end date."}), 400
 
@@ -1171,7 +1171,7 @@ def update_leave_request_status(req_id):
     leave_req = LeaveRequest.query.get(req_id)
     if not leave_req:
         return jsonify({"msg": "Leave request not found."}), 404
-    
+
     if leave_req.user_id == manager_user.id:
         return jsonify({"msg": "You cannot approve or deny your own leave request."}), 403
 
@@ -1182,7 +1182,7 @@ def update_leave_request_status(req_id):
         return jsonify({"msg": "Invalid status provided. Must be 'Approved' or 'Denied'."}), 400
 
     leave_req.status = status
-    
+
     try:
         db.session.commit()
         return jsonify({"msg": f"Leave request for {leave_req.user.full_name} has been {status.lower()}."}), 200
@@ -1205,7 +1205,7 @@ def view_leave_document(req_id):
     leave_req = LeaveRequest.query.get(req_id)
     if not leave_req:
         return jsonify({"msg": "Leave request not found."}), 404
-    
+
     # Check permissions (requester or manager/admin)
     if not (leave_req.user_id == user.id or user.has_role('manager') or user.has_role('general_manager') or user.has_role('system_admin')):
         return jsonify({"msg": "Access Denied: You are not authorized to view this document."}), 403
@@ -1531,7 +1531,7 @@ def get_variance_report():
                 'explanation': explanation.reason if explanation else None,
                 'explanation_by': explanation.user.full_name if explanation and explanation.user else None,
             }
-    
+
     # Convert dictionary to list for jsonify, then sort
     sorted_variance_list = sorted(
         list(variance_report_data.values()),
@@ -1611,7 +1611,7 @@ def submit_variance_explanation():
 
     if not count_id or not reason:
         return jsonify({"msg": "Missing required fields: count_id or reason."}), 400
-    
+
     count_entry = Count.query.get(count_id)
     if not count_entry:
         return jsonify({"msg": "Count entry not found."}), 404
@@ -1630,7 +1630,7 @@ def submit_variance_explanation():
             user_id=user.id
         )
         db.session.add(new_explanation)
-    
+
     try:
         db.session.commit()
         return jsonify({"msg": "Variance explanation saved successfully."}), 201
@@ -1687,7 +1687,7 @@ def set_all_prices_api():
         if product_obj.unit_price != parsed_price:
             product_obj.unit_price = parsed_price
             updated_count += 1
-    
+
     if errors:
         db.session.rollback()
         return jsonify({"msg": "Errors occurred during submission.", "details": errors}), 400
@@ -1716,7 +1716,7 @@ def add_product_api():
 
     if not name or not product_type or not unit_of_measure:
         return jsonify({"msg": "Missing required fields: name, type, or unit_of_measure."}), 400
-    
+
     if Product.query.filter_by(name=name).first():
         return jsonify({"msg": f"A product named '{name}' already exists."}), 409 # Conflict
 
@@ -1754,7 +1754,7 @@ def get_product_details_api(product_id):
     product = Product.query.get(product_id)
     if not product:
         return jsonify({"msg": "Product not found."}), 404
-    
+
     return jsonify({
         "id": product.id,
         "name": product.name,
@@ -1774,7 +1774,7 @@ def update_product_api(product_id):
     product = Product.query.get(product_id)
     if not product:
         return jsonify({"msg": "Product not found."}), 404
-    
+
     data = request.json
     name = data.get('name')
     product_type = data.get('type')
@@ -1784,7 +1784,7 @@ def update_product_api(product_id):
 
     if not name or not product_type or not unit_of_measure:
         return jsonify({"msg": "Missing required fields: name, type, or unit_of_measure."}), 400
-    
+
     # Check for duplicate name if name is changed
     if name != product.name and Product.query.filter_by(name=name).first():
         return jsonify({"msg": f"A product named '{name}' already exists."}), 409 # Conflict
@@ -1820,7 +1820,7 @@ def delete_product_api(product_id):
     product = Product.query.get(product_id)
     if not product:
         return jsonify({"msg": "Product not found."}), 404
-    
+
     db.session.delete(product)
 
     try:
@@ -1843,7 +1843,7 @@ def add_location_api():
 
     if not name:
         return jsonify({"msg": "Location name is required."}), 400
-    
+
     if Location.query.filter_by(name=name).first():
         return jsonify({"msg": f"A location named '{name}' already exists."}), 409 # Conflict
 
@@ -1868,7 +1868,7 @@ def get_location_details_api(location_id):
     location = Location.query.get(location_id)
     if not location:
         return jsonify({"msg": "Location not found."}), 404
-    
+
     assigned_products_data = []
     for product in location.products:
         assigned_products_data.append({
@@ -1896,13 +1896,13 @@ def update_location_api(location_id):
     location = Location.query.get(location_id)
     if not location:
         return jsonify({"msg": "Location not found."}), 404
-    
+
     data = request.json
     name = data.get('name')
 
     if not name:
         return jsonify({"msg": "Location name is required."}), 400
-    
+
     if name != location.name and Location.query.filter_by(name=name).first():
         return jsonify({"msg": f"A location named '{name}' already exists."}), 409 # Conflict
 
@@ -1926,7 +1926,7 @@ def delete_location_api(location_id):
     location = Location.query.get(location_id)
     if not location:
         return jsonify({"msg": "Location not found."}), 404
-    
+
     db.session.delete(location)
 
     try:
@@ -1947,7 +1947,7 @@ def assign_products_to_location_api(location_id):
     location = Location.query.get(location_id)
     if not location:
         return jsonify({"msg": "Location not found."}), 404
-    
+
     data = request.json
     assigned_product_ids = data.get('assigned_product_ids', []) # List of product IDs
 
@@ -1999,7 +1999,7 @@ def get_my_availability():
     # ...
     week_offset = 1 # <--- Fixed to 1 for availability submission
     _, next_week_dates, _, _ = _build_week_dates_api(week_offset=week_offset) # Use the correct week_offset
-    
+
     existing_submissions = ShiftSubmission.query.filter(
         ShiftSubmission.user_id == User.id,
         ShiftSubmission.shift_date.in_(next_week_dates)
@@ -2008,7 +2008,7 @@ def get_my_availability():
     availability_data = {}
     for sub in existing_submissions:
         availability_data.setdefault(sub.shift_date.isoformat(), []).append(sub.shift_type)
-    
+
     return jsonify({ # <--- MODIFIED: Return week_dates here
         "availability_data": availability_data,
         "week_dates": [d.isoformat() for d in next_week_dates]
@@ -2050,7 +2050,7 @@ def submit_my_availability():
         try:
             date_str, shift_type = shift_str.split('_')
             submitted_date = datetime.strptime(date_str, '%Y-%m-%d').date()
-            
+
             # Basic validation: ensure date is in the correct next week
             if submitted_date not in next_week_dates:
                  return jsonify({"msg": f"Submitted date {date_str} is outside the allowed submission week."}), 400
@@ -2070,7 +2070,7 @@ def submit_my_availability():
         else:
             for shift_type in types_for_day:
                 final_shifts_to_store.append((date_str, shift_type))
-    
+
     try:
         # Delete existing submissions for this user for the next week
         ShiftSubmission.query.filter(
@@ -2103,12 +2103,12 @@ def get_my_assigned_shifts():
     user = User.query.get(current_user_id)
     if not user:
         return jsonify({"msg": "User not found"}), 404
-    
+
     # Week offset for navigating current/past/future weeks
     week_offset = request.args.get('week_offset', 0, type=int)
 
     start_of_week, week_dates, _, leave_dict = _build_week_dates_api(week_offset=week_offset)
-    
+
     shifts_query = Schedule.query.filter(
         Schedule.shift_date.in_(week_dates),
         Schedule.user_id == user.id,
@@ -2135,7 +2135,8 @@ def get_my_assigned_shifts():
         }
 
         # Check for pending swap requests
-        pending_swap = ShiftSwapRequest.query.filter_by(schedule_id=shift.id, status='Pending').first()
+        # MODIFIED: Filter by requester_schedule_id now
+        pending_swap = ShiftSwapRequest.query.filter_by(requester_schedule_id=shift.id, status='Pending').first()
         if pending_swap:
             shift_data['swap_request_status'] = 'Pending'
 
@@ -2145,9 +2146,9 @@ def get_my_assigned_shifts():
             shift_data['volunteered_cycle_status'] = volunteered_cycle.status
             shift_data['requester_id'] = volunteered_cycle.requester_id
             shift_data['relinquish_reason'] = volunteered_cycle.relinquish_reason
-        
+
         schedule_by_day_data[shift.shift_date.isoformat()].append(shift_data)
-    
+
     user_primary_role_for_rules = 'manager' # Default for roles not explicitly defined in ROLE_SHIFT_DEFINITIONS
     if user.has_role('bartender'): user_primary_role_for_rules = 'bartender'
     elif user.has_role('waiter'): user_primary_role_for_rules = 'waiter'
@@ -2163,6 +2164,7 @@ def get_my_assigned_shifts():
         "display_role_name_for_rules": user_primary_role_for_rules,
         "week_offset": week_offset
     }), 200
+
 
 @mobile_api_bp.route('/schedules/shift_definitions', methods=['GET'])
 @jwt_required()
@@ -2277,7 +2279,7 @@ def get_manage_swaps_data():
             'status': s.status,
             'timestamp': s.timestamp.isoformat()
         })
-    
+
     return jsonify({
         "week_offset": week_offset,
         "pending_swaps": processed_pending_swaps,
@@ -2299,7 +2301,7 @@ def update_swap_status_api(swap_id):
     swap_request = ShiftSwapRequest.query.get(swap_id)
     if not swap_request:
         return jsonify({"msg": "Shift swap request not found."}), 404
-    
+
     if swap_request.schedule is None: # Safety check
         return jsonify({"msg": "Associated schedule for swap request is missing."}), 400
 
@@ -2367,7 +2369,7 @@ def update_swap_status_api(swap_id):
         )
         flash_category = "success"
         log_activity(f"Approved shift swap request #{swap_request.id}: {coverer.full_name} now covers {requester.full_name}'s shift on {schedule_item.shift_date}.")
-    
+
     db.session.commit() # Commit all changes
 
     # Send general announcement for approval
@@ -2403,7 +2405,7 @@ def update_swap_status_api(swap_id):
             f"Your request to swap the {schedule_item.assigned_shift} shift on {schedule_item.shift_date.strftime('%a, %b %d')} has been denied by a manager.",
             data={"type": "shift_swap_denied", "shift_date": schedule_item.shift_date.isoformat(), "role": requester.role_names[0] if requester.roles else "staff"}
         )
-    
+
     return jsonify({"msg": notification_message, "status": flash_category}), 200
 
 @mobile_api_bp.route('/schedules/manage_volunteered_shifts_data', methods=['GET'])
@@ -2511,7 +2513,7 @@ def update_volunteered_shift_status_api(v_shift_id):
     v_shift = VolunteeredShift.query.get(v_shift_id)
     if not v_shift:
         return jsonify({"msg": "Volunteered shift not found."}), 404
-    
+
     if v_shift.schedule is None: # Safety check
         return jsonify({"msg": "Associated schedule for volunteered shift is missing."}), 400
 
@@ -2528,7 +2530,7 @@ def update_volunteered_shift_status_api(v_shift_id):
     notification_title = ""
     notification_message = ""
     flash_category = "info" # default
-    
+
     shift_date_str = original_schedule_item.shift_date.strftime('%a, %b %d')
 
     if action == 'Cancel':
@@ -2562,7 +2564,7 @@ def update_volunteered_shift_status_api(v_shift_id):
     elif action == 'Assign':
         if not approved_volunteer_id:
             return jsonify({"msg": "You must select a volunteer to assign the shift."}), 400
-        
+
         approved_volunteer = User.query.get(approved_volunteer_id)
         if not approved_volunteer:
             return jsonify({"msg": "Selected volunteer not found."}), 400
@@ -2600,7 +2602,7 @@ def update_volunteered_shift_status_api(v_shift_id):
         )
         flash_category = "success"
         log_activity(f"Approved volunteer '{approved_volunteer.full_name}' for shift ID {v_shift.schedule_id} (orig. by {requester.full_name}).")
-        
+
         # Notify requester and approved volunteer
         if requester.id != manager_user.id:
             send_push_notification(
@@ -2660,7 +2662,7 @@ def update_required_staff_api():
 
     if not role_name or not requirements:
         return jsonify({"msg": "Missing required data: role_name or requirements."}), 400
-    
+
     start_of_week, week_dates, end_of_week, _ = _build_week_dates_api(week_offset=week_offset)
 
     try:
@@ -2676,7 +2678,7 @@ def update_required_staff_api():
 
             if min_staff_value < 0:
                 return jsonify({"msg": f"Min staff for {date_str} must be non-negative."}), 400
-            
+
             parsed_max_staff = None
             if max_staff_value is not None and max_staff_value != '':
                 try:
@@ -2723,6 +2725,15 @@ def get_shifts_today_data():
     """
     Returns shifts scheduled for the current day, categorized by role.
     """
+    target_date_str = request.args.get('target_date')
+    if target_date_str:
+        try:
+            today_date = datetime.strptime(target_date_str, '%Y-%m-%d').date()
+        except ValueError:
+            return jsonify({"msg": "Invalid target_date format. Use YYYY-MM-DD."}), 400
+    else:
+        today_date = datetime.utcnow().date()
+
     today_date = datetime.utcnow().date()
 
     # Fetch all published shifts for today for all relevant users
@@ -2737,7 +2748,7 @@ def get_shifts_today_data():
         'Waiters': [],
         'Skullers': []
     }
-    
+
     users_lookup = {user.id: user for user in User.query.all()} # For quick user object lookup
 
     for shift in all_shifts_today_raw:
@@ -2746,7 +2757,7 @@ def get_shifts_today_data():
             continue
 
         user_roles_names = [r.name for r in user.roles]
-        
+
         # Determine role for time display (take first relevant one from ROLE_SHIFT_DEFINITIONS)
         display_role_for_time = 'manager' # Fallback
         if 'bartender' in user_roles_names: display_role_for_time = 'bartender'
@@ -2778,7 +2789,7 @@ def get_shifts_today_data():
             shifts_by_role_categorized['Waiters'].append(shift_info)
         if 'skullers' in user_roles_names:
             shifts_by_role_categorized['Skullers'].append(shift_info)
-        
+
     sorted_role_categories = ['Managers', 'Bartenders', 'Waiters', 'Skullers']
 
     return jsonify({
@@ -2830,7 +2841,7 @@ def get_consolidated_schedule(view_type):
         display_role_name_for_rules = 'skullers'
     else:
         return jsonify({"msg": f"Invalid consolidated schedule view type: {view_type}"}), 400
-    
+
     # Fetch users for the targeted roles
     users_in_category = User.query.join(User.roles).filter(
         Role.name.in_(target_roles),
@@ -2926,7 +2937,7 @@ def get_all_warnings_api():
             'resolved_by_full_name': warning.resolved_by.full_name if warning.resolved_by else None,
             'timestamp': warning.timestamp.isoformat(),
         })
-    
+
     return jsonify(warnings_data), 200
 
 @mobile_api_bp.route('/hr/warnings/<int:warning_id>', methods=['GET'])
@@ -2939,7 +2950,7 @@ def get_warning_details_api(warning_id):
     warning = Warning.query.get(warning_id)
     if not warning:
         return jsonify({"msg": "Warning not found."}), 404
-    
+
     return jsonify({
         'id': warning.id,
         'user_id': warning.user_id,
@@ -2982,7 +2993,7 @@ def add_warning_api():
     warned_user = User.query.get(user_id)
     if not warned_user:
         return jsonify({"msg": "Staff member not found."}), 404
-    
+
     if warned_user.id == get_jwt_identity(): # Cannot warn self
         return jsonify({"msg": "You cannot issue a warning to yourself."}), 403
 
@@ -3021,7 +3032,7 @@ def edit_warning_api(warning_id):
     warning = Warning.query.get(warning_id)
     if not warning:
         return jsonify({"msg": "Warning not found."}), 404
-    
+
     # Permission check: Only issuer, GM, or System Admin can edit
     if not (warning.issued_by_id == current_user_id or current_user.has_role('general_manager') or current_user.has_role('system_admin')):
         return jsonify({"msg": "Access Denied: You are not authorized to edit this warning."}), 403
@@ -3036,7 +3047,7 @@ def edit_warning_api(warning_id):
 
     if not user_id or not date_issued_str or not reason or not severity or not status:
         return jsonify({"msg": "Missing required fields for warning update."}), 400
-    
+
     try:
         date_issued = datetime.strptime(date_issued_str, '%Y-%m-%d').date()
     except ValueError:
@@ -3045,7 +3056,7 @@ def edit_warning_api(warning_id):
     warned_user = User.query.get(user_id)
     if not warned_user:
         return jsonify({"msg": "Staff member not found."}), 404
-    
+
     if warned_user.id == current_user_id: # Cannot warn self
         return jsonify({"msg": "You cannot update a warning for yourself."}), 403
 
@@ -3065,7 +3076,7 @@ def edit_warning_api(warning_id):
         else:
             warning.resolution_date = None
             warning.resolved_by_id = None
-    
+
     try:
         db.session.commit()
         log_activity(f"Edited warning ID {warning_id} for {warned_user.full_name}.")
@@ -3090,7 +3101,7 @@ def resolve_warning_api(warning_id):
     warning = Warning.query.get(warning_id)
     if not warning:
         return jsonify({"msg": "Warning not found."}), 404
-    
+
     if warning.issued_by_id != current_user_id and not (manager_user.has_role('general_manager') or manager_user.has_role('system_admin')):
         return jsonify({"msg": "Access Denied: You are not authorized to resolve this this warning."}), 403
 
@@ -3118,7 +3129,7 @@ def delete_warning_api(warning_id):
     current_user = User.query.get(current_user_id)
     if not current_user:
         return jsonify({"msg": "User not found"}), 404
-    
+
     # Permission check: Only GM or System Admin can delete
     if not (current_user.has_role('general_manager') or current_user.has_role('system_admin')):
         return jsonify({"msg": "Access Denied: You are not authorized to delete this warning."}), 403
@@ -3126,7 +3137,7 @@ def delete_warning_api(warning_id):
     warning = Warning.query.get(warning_id)
     if not warning:
         return jsonify({"msg": "Warning not found."}), 404
-    
+
     warned_user_full_name = warning.user.full_name # Get name before deleting
 
     db.session.delete(warning)
@@ -3239,7 +3250,7 @@ def get_all_bookings_api():
             'user_id': booking.user_id,
             'user_full_name': booking.user.full_name,
         })
-    
+
     return jsonify({
         "future_bookings": future_bookings_data,
         "past_bookings": past_bookings_data,
@@ -3308,7 +3319,7 @@ def get_booking_details_api(booking_id):
     booking = Booking.query.get(booking_id)
     if not booking:
         return jsonify({"msg": "Booking not found."}), 404
-    
+
     return jsonify({
         'id': booking.id,
         'customer_name': booking.customer_name,
@@ -3333,7 +3344,7 @@ def edit_booking_api(booking_id):
     booking = Booking.query.get(booking_id)
     if not booking:
         return jsonify({"msg": "Booking not found."}), 404
-    
+
     data = request.json
     customer_name = data.get('customer_name')
     contact_info = data.get('contact_info')
@@ -3360,7 +3371,7 @@ def edit_booking_api(booking_id):
 
     if party_size <= 0:
         return jsonify({"msg": "Party size must be a positive number."}), 400
-    
+
     booking.customer_name = customer_name
     booking.contact_info = contact_info
     booking.party_size = party_size
@@ -3388,7 +3399,7 @@ def delete_booking_api(booking_id):
     booking = Booking.query.get(booking_id)
     if not booking:
         return jsonify({"msg": "Booking not found."}), 404
-    
+
     customer_name = booking.customer_name # Get name before deleting
 
     db.session.delete(booking)
@@ -3407,7 +3418,7 @@ def delete_booking_api(booking_id):
     booking = Booking.query.get(booking_id)
     if not booking:
         return jsonify({"msg": "Booking not found."}), 404
-    
+
     db.session.delete(booking)
 
     try:
@@ -3434,7 +3445,7 @@ def get_all_users_api():
 
     if filter_role_name and filter_role_name != 'all':
         users_query = users_query.join(User.roles).filter(Role.name == filter_role_name)
-    
+
     if search_query:
         search_term = f"%{search_query.lower()}%"
         users_query = users_query.filter(or_(
@@ -3459,7 +3470,7 @@ def get_all_users_api():
             'last_seen': user.last_seen.isoformat() if user.last_seen else None,
             'force_logout_requested': user.force_logout_requested,
         })
-    
+
     return jsonify(users_data), 200
 
 @mobile_api_bp.route('/users/roles/all', methods=['GET'])
@@ -3497,7 +3508,7 @@ def add_user_api():
 
     if not username or not full_name or not password or not role_names:
         return jsonify({"msg": "Missing required fields: username, full name, password, or roles."}), 400
-    
+
     if User.query.filter_by(username=username).first():
         return jsonify({"msg": f"A user with username '{username}' already exists."}), 409 # Conflict
 
@@ -3537,11 +3548,11 @@ def get_user_details_api(user_id):
     user_to_edit = User.query.get(user_id)
     if not user_to_edit:
         return jsonify({"msg": "User not found."}), 404
-    
+
     # Check if current_user is an owner with limited view (only allowed to see basic info)
     # This logic from web app's edit_user:
     is_limited_view = current_user.has_role('owners') and not (current_user.has_role('system_admin') or current_user.has_role('general_manager'))
-    
+
     return jsonify({
         'id': user_to_edit.id,
         'username': user_to_edit.username,
@@ -3573,7 +3584,7 @@ def edit_user_details_api(user_id):
     user_to_edit = User.query.get(user_id)
     if not user_to_edit:
         return jsonify({"msg": "User not found."}), 404
-    
+
     # Safety checks (copied from web app)
     if user_id == 1: # Root admin
         return jsonify({'msg': 'The root administrator account cannot be edited.'}), 403
@@ -3689,7 +3700,7 @@ def reinstate_user_api(user_id):
     user_to_reinstate = User.query.get(user_id)
     if not user_to_reinstate:
         return jsonify({"msg": "User not found."}), 404
-    
+
     # Safety checks
     if user_id == 1:
         return jsonify({'msg': 'The root administrator account cannot be reinstated.'}), 403
@@ -3726,13 +3737,13 @@ def delete_user_api(user_id):
     user_to_delete = User.query.get(user_id)
     if not user_to_delete:
         return jsonify({"msg": "User not found."}), 404
-    
+
     # Safety checks
     if user_id == 1:
         return jsonify({'msg': 'The root administrator account cannot be deleted.'}), 403
     if user_id == current_user_id:
         return jsonify({'msg': 'You cannot delete your own account.'}), 403
-    
+
     warned_user_full_name = user_to_delete.full_name # Get name before deleting (if not already loaded by relationship)
 
     db.session.delete(user_to_delete)
@@ -3783,13 +3794,13 @@ def force_logout_api(user_id):
     user_to_logout = User.query.get(user_id)
     if not user_to_logout:
         return jsonify({"msg": "User not found."}), 404
-    
+
     # Safety checks
     if user_id == 1:
         return jsonify({'msg': 'The root administrator account cannot be force logged out.'}), 403
     if user_id == current_user_id:
         return jsonify({'msg': 'You cannot force log out your own account.'}), 403
-    
+
     # Role-based restriction for managers
     if current_manager.has_role('manager') and not (current_manager.has_role('system_admin') or current_manager.has_role('general_manager')):
         target_is_staff = user_to_logout.has_role('bartender') or user_to_logout.has_role('waiter') or user_to_logout.has_role('skullers')
@@ -3869,7 +3880,7 @@ def add_announcement_api():
 
     if not title or not message:
         return jsonify({"msg": "Missing required fields: title or message."}), 400
-    
+
     action_link_url = None
     if action_link_view and action_link_view != 'none':
         # Construct the full URL using the configured base URL
@@ -3909,13 +3920,48 @@ def add_announcement_api():
         new_announcement.target_roles = target_roles
 
     try:
-        db.session.commit()
-        log_activity(f"Posted new announcement titled: '{title}' via mobile API.")
-        return jsonify({"msg": "Announcement posted successfully!", "announcement_id": new_announcement.id}), 201
+         db.session.commit()
+         log_activity(f"Posted new announcement titled: '{title}' via mobile API.")
+
+         # --- NEW: Send Push Notification for Announcement ---
+         # Determine recipients: if target_roles are specified, notify only them.
+         # Otherwise, notify all users who typically view announcements.
+         users_to_notify = []
+         if new_announcement.target_roles:
+             users_to_notify = User.query.join(User.roles).filter(
+                 Role.id.in_([r.id for r in new_announcement.target_roles]),
+                 User.is_suspended == False
+             ).all()
+         else:
+             # Notify all users who have access to announcements (non-scheduler roles, plus admins/GMs/owners)
+             # This is similar to the logic in inject_global_data
+             all_roles_with_announcement_access = Role.query.filter(
+                 or_(
+                     Role.name.notin_(['scheduler']), # Exclude scheduler by default
+                     Role.name.in_(['system_admin', 'general_manager', 'owners']) # Include if they are admins/GMs/owners
+                 )
+             ).all()
+             # Only notify users who have at least one of these roles AND are not suspended
+             users_to_notify = User.query.join(User.roles).filter(
+                 Role.id.in_([r.id for r in all_roles_with_announcement_access]),
+                 User.is_suspended == False
+             ).distinct().all() # Use distinct() to avoid duplicates if user has multiple roles
+
+         for user_to_notify in users_to_notify:
+             send_onesignal_notification( # <--- CALL NEW FUNCTION
+                 user_to_notify.id,
+                 f"New Announcement: {title}",
+                 f"{new_announcement.message}",
+                 data={"type": "announcement_posted", "announcement_id": new_announcement.id, "category": new_announcement.category,
+                       "click_action": f"{current_app.config['FLASK_WEB_BASE_URL']}/static/web/#/manage_announcements"} # <--- NEW: click_action for OneSignal
+             )
+         # --- END NEW ---
+
+         return jsonify({"msg": "Announcement posted successfully!", "announcement_id": new_announcement.id}), 201
     except Exception as e:
-        db.session.rollback()
-        current_app.logger.error(f"Error adding announcement: {e}", exc_info=True)
-        return jsonify({"msg": "Failed to add announcement due to server error."}), 500
+         db.session.rollback()
+         current_app.logger.error(f"Error adding announcement: {e}", exc_info=True)
+         return jsonify({"msg": "Failed to add announcement due to server error."}), 500
 
 
 @mobile_api_bp.route('/announcements/<int:announcement_id>/delete', methods=['POST'])
@@ -3933,7 +3979,7 @@ def delete_announcement_api(announcement_id):
     announcement = Announcement.query.get(announcement_id)
     if not announcement:
         return jsonify({"msg": "Announcement not found."}), 404
-    
+
     # Permission check: Issuer, GM, or System Admin can delete
     if not (announcement.user_id == current_user_id or current_user.has_role('general_manager') or current_user.has_role('system_admin')):
         return jsonify({"msg": "Access Denied: You are not authorized to delete this announcement."}), 403
@@ -3963,7 +4009,7 @@ def clear_all_announcements_api():
     current_user = User.query.get(current_user_id)
     if not current_user:
         return jsonify({"msg": "User not found"}), 404
-    
+
     # Permission check: Manager, GM, or System Admin can clear
     if not (current_user.has_role('manager') or current_user.has_role('general_manager') or current_user.has_role('system_admin')):
         return jsonify({"msg": "Access Denied: You are not authorized to clear all announcements."}), 403
@@ -3991,7 +4037,7 @@ def get_user_manual_content_api():
         return jsonify({"msg": "User not found"}), 404
 
     user_roles = user.role_names
-    
+
     # Replicate filtering logic from app.py
     filtered_content = {}
     from ..app import MANUAL_CONTENT # Import the global MANUAL_CONTENT dict
@@ -4001,10 +4047,53 @@ def get_user_manual_content_api():
                 'content': data['content'],
                 'roles': data['roles'] # Not strictly needed for UI, but included for consistency
             }
-    
+
     return jsonify(filtered_content), 200
     current_user_id = get_jwt_identity()
     user = User.query.get(current_user_id)
     if not user:
         return jsonify({"msg": "User not found"}), 404
 
+@mobile_api_bp.route('/onesignal_player_id/register', methods=['POST'])
+@jwt_required()
+def register_onesignal_player_id():
+    current_user_id = get_jwt_identity()
+    user = User.query.get(current_user_id)
+    if not user: return jsonify({"msg": "User not found"}), 404
+    data = request.json
+    player_id = data.get('player_id')
+    device_info = data.get('device_info')
+    if not player_id: return jsonify({"msg": "Player ID is required."}), 400
+
+    existing_player_id_entry = UserOneSignalPlayerId.query.filter_by(player_id=player_id).first()
+    if existing_player_id_entry:
+        if existing_player_id_entry.user_id != user.id:
+            existing_player_id_entry.user_id = user.id
+            existing_player_id_entry.device_info = device_info
+            existing_player_id_entry.timestamp = datetime.utcnow()
+        else:
+            existing_player_id_entry.device_info = device_info
+            existing_player_id_entry.timestamp = datetime.utcnow()
+    else:
+        new_entry = UserOneSignalPlayerId(user_id=user.id, player_id=player_id, device_info=device_info)
+        db.session.add(new_entry)
+    try: db.session.commit(); return jsonify({"msg": "OneSignal Player ID registered successfully."}), 201
+    except Exception as e: db.session.rollback(); current_app.logger.error(f"Error registering OneSignal Player ID: {e}", exc_info=True); return jsonify({"msg": "Failed to register OneSignal Player ID due to server error."}), 500
+
+
+# --- NEW: Unregister OneSignal Player ID ---
+@mobile_api_bp.route('/onesignal_player_id/unregister', methods=['POST'])
+@jwt_required()
+def unregister_onesignal_player_id():
+    current_user_id = get_jwt_identity()
+    user = User.query.get(current_user_id)
+    if not user: return jsonify({"msg": "User not found"}), 404
+    data = request.json
+    player_id = data.get('player_id')
+    if not player_id: return jsonify({"msg": "Player ID is required."}), 400
+    entry = UserOneSignalPlayerId.query.filter_by(user_id=user.id, player_id=player_id).first()
+    if entry:
+        db.session.delete(entry)
+        try: db.session.commit(); return jsonify({"msg": "OneSignal Player ID unregistered successfully."}), 200
+        except Exception as e: db.session.rollback(); current_app.logger.error(f"Error unregistering OneSignal Player ID: {e}", exc_info=True); return jsonify({"msg": "Failed to unregister OneSignal Player ID due to server error."}), 500
+    else: return jsonify({"msg": "OneSignal Player ID not found for this user."}), 404

@@ -2,8 +2,8 @@
 import 'package:flutter/material.dart';
 import '../api/auth_api.dart';
 import '../models/schedule.dart'; // ScheduleItem and ShiftDefinitions
-import '../models/staff_member.dart';
-import '../models/shift_management.dart'; // <--- NEW IMPORT
+import '../models/staff_member.dart'; // <--- NEW IMPORT for SchedulerUser
+import '../models/shift_management.dart';
 
 
 
@@ -18,11 +18,16 @@ class ScheduleProvider with ChangeNotifier {
   Map<String, List<String>> _myAvailability = {};
   List<DateTime> _availabilitySubmissionWeekDates = [];
 
+  // Consolidated Schedule View State
   Map<String, dynamic> _consolidatedScheduleData = {}; // Raw data
   List<SchedulerUser> _usersInCategory = []; // Users for the current consolidated view
   String _currentConsolidatedViewType = 'boh'; // Default view type (boh, foh, managers)
   int _currentConsolidatedWeekOffset = 0;
 
+  // --- NEW: Scheduler Role View State ---
+  String? _currentSchedulerRole;
+  int _currentSchedulerWeekOffset = 0;
+  Map<String, dynamic>? _currentSchedulerData; // Holds users, availability, assignments, status
 
   // Manage Swaps State
   List<PendingSwap> _pendingSwaps = []; // Actionable pending swaps
@@ -64,10 +69,16 @@ class ScheduleProvider with ChangeNotifier {
   String get currentConsolidatedViewType => _currentConsolidatedViewType;
   int get currentConsolidatedWeekOffset => _currentConsolidatedWeekOffset;
 
+  // --- NEW: Scheduler Role View Getters ---
+  String? get currentSchedulerRole => _currentSchedulerRole;
+  int get currentSchedulerWeekOffset => _currentSchedulerWeekOffset;
+  Map<String, dynamic>? get currentSchedulerData => _currentSchedulerData;
+
+
   // Getters for Availability
   Map<String, dynamic> get availabilityWindowStatus => _availabilityWindowStatus;
   Map<String, List<String>> get myAvailability => _myAvailability;
-  List<DateTime> get availabilitySubmissionWeekDates => _availabilitySubmissionWeekDates; // <--- NEW getter
+  List<DateTime> get availabilitySubmissionWeekDates => _availabilitySubmissionWeekDates;
   Map<String, dynamic> get myAssignedScheduleData => _myAssignedScheduleData;
 
   // Getters for My Schedule
@@ -94,6 +105,7 @@ class ScheduleProvider with ChangeNotifier {
 
   // --- Fetch Shift Definitions ---
   Future<void> fetchShiftDefinitions() async {
+    if (_shiftDefinitions != null) return; // Already loaded
     _isLoading = true;
     _errorMessage = null;
     notifyListeners();
@@ -115,11 +127,9 @@ class ScheduleProvider with ChangeNotifier {
     try {
       _availabilityWindowStatus = await _authApi.getAvailabilityWindowStatus();
       
-      // --- NEW: Calculate next week's dates based on API response ---
       final String nextWeekStartStr = _availabilityWindowStatus['next_week_start_date'] as String;
       final DateTime nextWeekStartDate = DateTime.parse(nextWeekStartStr).toUtc();
       _availabilitySubmissionWeekDates = [for (int i = 0; i < 7; i++) nextWeekStartDate.add(Duration(days: i))];
-      // --- END NEW ---
     } catch (e) {
       _errorMessage = e.toString().replaceFirst('Exception: ', '');
     } finally {
@@ -137,7 +147,6 @@ class ScheduleProvider with ChangeNotifier {
       final Map<String, dynamic> rawAvailability = await _authApi.getMyAvailability(1);
       
       _myAvailability = rawAvailability.map((dateStr, shiftsDynamicList) {
-        // --- MODIFIED: More robust handling of shiftsDynamicList ---
         List<String> shifts;
         if (shiftsDynamicList is List) { // Check if it's a List first
           shifts = shiftsDynamicList.map((e) => e.toString()).toList();
@@ -145,12 +154,11 @@ class ScheduleProvider with ChangeNotifier {
           shifts = []; // Default to an empty list if not a List or null
         }
         return MapEntry(dateStr, shifts);
-        // --- END MODIFIED ---
       });
 
     } catch (e) {
       _errorMessage = e.toString().replaceFirst('Exception: ', '');
-      print('ERROR in fetchMyAvailability: $_errorMessage'); // Add specific debug for this
+      print('ERROR in fetchMyAvailability: $_errorMessage');
     } finally {
       _isLoading = false;
       notifyListeners();
@@ -183,27 +191,20 @@ class ScheduleProvider with ChangeNotifier {
     _currentViewWeekOffset = weekOffset;
     _myAssignedScheduleData = await _authApi.getMyAssignedShifts(weekOffset);
     
-    print('DEBUG (ScheduleProvider): Raw _myAssignedScheduleData from API: $_myAssignedScheduleData'); // <--- ADD THIS
-    
-    // Parse week dates (List<String> to List<DateTime>)
     final List<dynamic> weekDatesJson = _myAssignedScheduleData['week_dates'] ?? [];
     _myScheduleWeekDates = weekDatesJson.map((dateStr) => DateTime.parse(dateStr as String)).toList();
     
-    print('DEBUG (ScheduleProvider): Parsed _myScheduleWeekDates (Mon-Sun): $_myScheduleWeekDates');
-
-      // Parse schedule by day (Map<String, List<Map<String, dynamic>>> to Map<String, List<ScheduleItem>>)
-      _myScheduleByDay = {}; // Clear previous data
-      final Map<String, dynamic> scheduleByDayJson = _myAssignedScheduleData['schedule_by_day'] ?? {};
-      scheduleByDayJson.forEach((dateIso, shiftsJsonList) {
-        _myScheduleByDay[dateIso] = (shiftsJsonList as List<dynamic>)
-            .map((shiftJson) => ScheduleItem.fromJson(shiftJson as Map<String, dynamic>))
-            .toList();
-      });
-      // --- END NEW ---
+    _myScheduleByDay = {}; // Clear previous data
+    final Map<String, dynamic> scheduleByDayJson = _myAssignedScheduleData['schedule_by_day'] ?? {};
+    scheduleByDayJson.forEach((dateIso, shiftsJsonList) {
+      _myScheduleByDay[dateIso] = (shiftsJsonList as List<dynamic>)
+          .map((shiftJson) => ScheduleItem.fromJson(shiftJson as Map<String, dynamic>))
+          .toList();
+    });
 
     } catch (e) {
       _errorMessage = e.toString().replaceFirst('Exception: ', '');
-      print('ERROR (ScheduleProvider.fetchMyAssignedShifts): $_errorMessage'); // <--- ADD THIS
+      print('ERROR (ScheduleProvider.fetchMyAssignedShifts): $_errorMessage');
     } finally {
       _isLoading = false;
       notifyListeners();
@@ -236,10 +237,12 @@ class ScheduleProvider with ChangeNotifier {
     }
   }
 
-  // --- NEW: Submit New Swap Request ---
+  // --- Submit New Swap Request ---
   Future<void> submitNewSwapRequest({
     required int requesterScheduleId,
     required int desiredCoverId,
+    String swapPart = 'full',
+    int? covererScheduleId, // New parameter
   }) async {
     _isLoading = true;
     _errorMessage = null;
@@ -248,19 +251,22 @@ class ScheduleProvider with ChangeNotifier {
       await _authApi.submitNewSwapRequest(
         requesterScheduleId: requesterScheduleId,
         desiredCoverId: desiredCoverId,
+        swapPart: swapPart,
+        covererScheduleId: covererScheduleId, // Pass it to API
       );
       _errorMessage = null;
       await fetchMyAssignedShifts(_currentViewWeekOffset); // Refresh assigned shifts
     } catch (e) {
       _errorMessage = e.toString().replaceFirst('Exception: ', '');
       print('ERROR in submitNewSwapRequest: $_errorMessage');
+      rethrow; // Re-throw to handle in UI
     } finally {
       _isLoading = false;
       notifyListeners();
     }
   }
 
-  // --- NEW: Submit Relinquish Shift Request ---
+  // --- Submit Relinquish Shift Request ---
   Future<void> submitRelinquishShift({
     required int scheduleId,
     String? reason,
@@ -278,6 +284,7 @@ class ScheduleProvider with ChangeNotifier {
     } catch (e) {
       _errorMessage = e.toString().replaceFirst('Exception: ', '');
       print('ERROR in submitRelinquishShift: $_errorMessage');
+      rethrow;
     } finally {
       _isLoading = false;
       notifyListeners();
@@ -285,17 +292,14 @@ class ScheduleProvider with ChangeNotifier {
   }
 
   // --- Initial Combined Fetch (for HomeScreen/init) ---
-  // MODIFIED: Also fetch staff for swaps globally
   @override
   Future<void> fetchInitialScheduleData() async {
     await Future.wait([
-      fetchShiftDefinitions(), // Needed globally for all schedule screens
+      fetchShiftDefinitions(), // Needed globally
       fetchAvailabilityWindowStatus(),
       fetchMyAvailability(),
       fetchMyAssignedShifts(0), // Fetch current week schedule
       fetchStaffForSwaps(),
-      // Add initial fetches for manager views if they are always loaded on dashboard
-      // For now, load these on their respective screens
     ]);
   }
 
@@ -323,7 +327,7 @@ class ScheduleProvider with ChangeNotifier {
     }
   }
 
-  // --- NEW: Update Swap Status ---
+  // --- Update Swap Status ---
   Future<void> updateSwapStatus(int swapId, String action, {int? covererId}) async {
     _isLoading = true;
     _errorMessage = null;
@@ -341,7 +345,7 @@ class ScheduleProvider with ChangeNotifier {
     }
   }
 
-  // --- NEW: Fetch Manage Volunteered Shifts Data ---
+  // --- Fetch Manage Volunteered Shifts Data ---
   Future<void> fetchManageVolunteeredShiftsData(int weekOffset) async {
     _isLoading = true;
     _errorMessage = null;
@@ -366,7 +370,7 @@ class ScheduleProvider with ChangeNotifier {
     }
   }
 
-  // --- NEW: Update Volunteered Shift Status ---
+  // --- Update Volunteered Shift Status ---
   Future<void> updateVolunteeredShiftStatus(int vShiftId, String action, {int? approvedVolunteerId}) async {
     _isLoading = true;
     _errorMessage = null;
@@ -384,7 +388,7 @@ class ScheduleProvider with ChangeNotifier {
     }
   }
 
-  // --- NEW: Fetch Manage Required Staff Data ---
+  // --- Fetch Manage Required Staff Data ---
   Future<void> fetchManageRequiredStaffData(String roleName, int weekOffset) async {
     _isLoading = true;
     _errorMessage = null;
@@ -408,7 +412,7 @@ class ScheduleProvider with ChangeNotifier {
     }
   }
 
-  // --- NEW: Update Required Staff ---
+  // --- Update Required Staff ---
   Future<void> updateRequiredStaff(List<RequiredStaffItem> requirements) async {
     _isLoading = true;
     _errorMessage = null;
@@ -436,13 +440,13 @@ class ScheduleProvider with ChangeNotifier {
     }
   }
 
-  // --- NEW: Fetch Shifts Today Data ---
-  Future<void> fetchShiftsTodayData() async {
+  // --- Fetch Shifts Today Data ---
+  Future<void> fetchShiftsTodayData(DateTime targetDate) async {
     _isLoading = true;
     _errorMessage = null;
     notifyListeners();
     try {
-      _dailyShiftsToday = await _authApi.getShiftsTodayData();
+      _dailyShiftsToday = await _authApi.getShiftsTodayData(targetDate);
     } catch (e) {
       _errorMessage = e.toString().replaceFirst('Exception: ', '');
       print('ERROR in fetchShiftsTodayData: $_errorMessage');
@@ -461,12 +465,9 @@ class ScheduleProvider with ChangeNotifier {
       _currentConsolidatedWeekOffset = weekOffset;
       _consolidatedScheduleData = await _authApi.getConsolidatedSchedule(viewType, weekOffset);
       
-      // Parse users in category
       _usersInCategory = (_consolidatedScheduleData['users_in_category'] as List<dynamic>?)
               ?.map((e) => SchedulerUser.fromJson(e as Map<String, dynamic>))
               .toList() ?? [];
-
-      // The `schedule_by_user` part of _consolidatedScheduleData will be accessed directly by the UI.
 
     } catch (e) {
       _errorMessage = e.toString().replaceFirst('Exception: ', '');
@@ -480,10 +481,60 @@ class ScheduleProvider with ChangeNotifier {
   // --- Helper to get shifts for a specific user and date from consolidated schedule ---
   List<ScheduleItem> getConsolidatedShiftsForUserAndDate(int userId, DateTime date) {
     final dateIso = date.toIso8601String().substring(0, 10);
-    final Map<String, dynamic>? userScheduleForWeek = _consolidatedScheduleData['schedule_by_user']?[userId.toString()] as Map<String, dynamic>?; // User ID is string key
+    final Map<String, dynamic>? userScheduleForWeek = _consolidatedScheduleData['schedule_by_user']?[userId.toString()] as Map<String, dynamic>?;
     final List<dynamic>? shiftsJsonList = userScheduleForWeek?[dateIso];
     
     if (shiftsJsonList == null) return [];
     return shiftsJsonList.map((shiftJson) => ScheduleItem.fromJson(shiftJson as Map<String, dynamic>)).toList();
+  }
+
+  // --- NEW: Fetch Role-Specific Scheduler Data ---
+  Future<void> fetchSchedulerData(String roleName, int weekOffset) async {
+    _isLoading = true;
+    _errorMessage = null;
+    notifyListeners();
+    try {
+      _currentSchedulerRole = roleName;
+      _currentSchedulerWeekOffset = weekOffset;
+      _currentSchedulerData = await _authApi.getSchedulerData(roleName, weekOffset);
+      
+      // Parse users in category for this scheduler role
+      _usersInCategory = (_currentSchedulerData!['users'] as List<dynamic>?) // The API endpoint returns 'users'
+              ?.map((e) => SchedulerUser.fromJson(e as Map<String, dynamic>))
+              .toList() ?? [];
+
+    } catch (e) {
+      _errorMessage = e.toString().replaceFirst('Exception: ', '');
+      print('ERROR in fetchSchedulerData: $_errorMessage');
+      rethrow;
+    } finally {
+      _isLoading = false;
+      notifyListeners();
+    }
+  }
+
+  // --- NEW: Submit Scheduler Assignments ---
+  Future<void> submitSchedulerAssignments(
+    String roleName,
+    int weekOffset,
+    Map<String, List<Map<String, dynamic>>> assignments, // {date_iso: [{user_id, shift_type, start, end}]}
+    bool publish,
+  ) async {
+    _isLoading = true;
+    _errorMessage = null;
+    notifyListeners();
+    try {
+      await _authApi.submitSchedulerAssignments(roleName, weekOffset, assignments, publish);
+      _errorMessage = null;
+      // After submission, re-fetch data to update the view with saved/published state and staffing status
+      await fetchSchedulerData(roleName, weekOffset); 
+    } catch (e) {
+      _errorMessage = e.toString().replaceFirst('Exception: ', '');
+      print('ERROR in submitSchedulerAssignments: $_errorMessage');
+      rethrow; // Allow UI to handle error
+    } finally {
+      _isLoading = false;
+      notifyListeners();
+    }
   }
 }

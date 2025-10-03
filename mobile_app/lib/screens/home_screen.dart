@@ -1,4 +1,5 @@
 // mobile_app/lib/screens/home_screen.dart
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart'; // For web links
@@ -54,6 +55,7 @@ class HomeScreen extends StatefulWidget {
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
+
 class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateMixin {
   late AnimationController _controller;
   late Animation<double> _scaleAnimation;
@@ -74,7 +76,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     _slideAnimation = Tween<Offset>(begin: Offset.zero, end: const Offset(-0.3, 0.0)).animate(
       CurvedAnimation(parent: _controller, curve: Curves.easeOut),
     );
-  }
+  } 
 
   @override
   void dispose() {
@@ -132,10 +134,9 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
         icon: Icons.people_alt,
         backgroundColor: const Color(0xFF1F2536), // Dark blue-grey
         subScreens: [
-          AppScreenItem(title: 'My Schedule', icon: Icons.calendar_view_week, targetScreen: const MyScheduleScreen(), requiredRoles: ['bartender', 'waiter', 'skullers', 'manager', 'general_manager', 'system_admin']),
+          AppScreenItem(title: 'Shifts for Today', icon: Icons.calendar_today, targetScreen: const DailyShiftsScreen(), requiredRoles: ['bartender', 'waiter', 'skullers', 'manager', 'general_manager', 'system_admin']),
           AppScreenItem(title: 'Submit Availability', icon: Icons.event_available, targetScreen: const SubmitAvailabilityScreen(), requiredRoles: ['bartender', 'waiter', 'skullers', 'manager', 'general_manager', 'system_admin']),
           AppScreenItem(title: 'Leave Requests', icon: Icons.calendar_month, targetScreen: const LeaveRequestListScreen(), requiredRoles: ['bartender', 'waiter', 'skullers', 'manager', 'general_manager', 'system_admin']),
-          AppScreenItem(title: 'Shifts for Today', icon: Icons.calendar_today, targetScreen: const DailyShiftsScreen(), requiredRoles: ['bartender', 'waiter', 'skullers', 'manager', 'general_manager', 'system_admin']),
           AppScreenItem(title: 'View BOH Schedule', icon: Icons.group, targetScreen: const ConsolidatedScheduleScreen(initialViewType: 'boh'), requiredRoles: ['bartender', 'skullers', 'manager', 'general_manager', 'system_admin']),
           AppScreenItem(title: 'View FOH Schedule', icon: Icons.group, targetScreen: const ConsolidatedScheduleScreen(initialViewType: 'foh'), requiredRoles: ['waiter', 'manager', 'general_manager', 'system_admin']),
           AppScreenItem(title: 'View Managers Schedule', icon: Icons.manage_accounts, targetScreen: const ConsolidatedScheduleScreen(initialViewType: 'managers'), requiredRoles: ['manager', 'general_manager', 'system_admin']),
@@ -143,6 +144,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
           AppScreenItem(title: 'Manage Volunteered', icon: Icons.back_hand, targetScreen: const ManageVolunteeredShiftsScreen(), requiredRoles: ['manager', 'general_manager', 'system_admin']),
           AppScreenItem(title: 'Manage Min Staff', icon: Icons.group_work, targetScreen: const ManageStaffMinimumsScreen(initialRoleName: 'bartender', initialWeekOffset: 0), requiredRoles: ['manager', 'general_manager', 'system_admin']),
           AppScreenItem(title: 'Manage Warnings', icon: Icons.warning, targetScreen: const ManageWarningsScreen(), requiredRoles: ['manager', 'general_manager', 'system_admin']),
+          AppScreenItem(title: 'Temp Schedule Test (Web)', icon: Icons.calendar_view_day, targetScreen: const SizedBox.shrink(), webLinkPath: '/temp_schedule_test', webLinkBaseUrl: 'https://portal.goatandco.com', requiredRoles: ['manager', 'general_manager', 'system_admin']),
         ],
       ),
       AppNavigationCategory(
@@ -154,7 +156,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
           AppScreenItem(title: 'Manage Users', icon: Icons.supervised_user_circle, targetScreen: const ManageUsersScreen(), requiredRoles: ['manager', 'general_manager', 'system_admin']),
           AppScreenItem(title: 'Active Users', icon: Icons.person_pin, targetScreen: const ActiveUsersScreen(), requiredRoles: ['manager', 'general_manager', 'system_admin', 'owners']),
           AppScreenItem(title: 'Announcements', icon: Icons.campaign, targetScreen: const ManageAnnouncementsScreen(), requiredRoles: ['manager', 'general_manager', 'system_admin', 'bartender', 'waiter', 'skullers']),
-          AppScreenItem(title: 'Web Scheduler Tool', icon: Icons.calendar_month, targetScreen: const SizedBox.shrink(), webLinkPath: '/scheduler/bartenders', webLinkBaseUrl: 'http://localhost:5000', requiredRoles: ['scheduler', 'manager', 'general_manager', 'system_admin']),
+          AppScreenItem(title: 'Web Scheduler Tool', icon: Icons.calendar_month, targetScreen: const SizedBox.shrink(), webLinkPath: '/scheduler/bartenders', webLinkBaseUrl: 'https://abbadon1903.pythonanywhere.com', requiredRoles: ['scheduler', 'manager', 'general_manager', 'system_admin']),
         ],
       ),
       AppNavigationCategory(

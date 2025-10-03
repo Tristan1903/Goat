@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart'; // For MultiProvider and ChangeNotifierProvider
 import 'screens/login_screen.dart';
 import 'screens/home_screen.dart';
+import 'screens/manage_announcements_screen.dart';
 import 'providers/auth_provider.dart';
 import 'providers/inventory_provider.dart';
 import 'providers/dashboard_provider.dart';
@@ -11,56 +12,16 @@ import 'providers/schedule_provider.dart';
 import 'providers/bookings_provider.dart';
 import 'providers/user_management_provider.dart';
 import 'providers/announcement_provider.dart';
-
-import 'package:firebase_core/firebase_core.dart'; // NEW IMPORT
-import 'package:firebase_messaging/firebase_messaging.dart'; // NEW IMPORT
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:google_fonts/google_fonts.dart';
 import 'screens/not_found_screen.dart';
 
-class DefaultFirebaseOptions {
-  static FirebaseOptions get currentPlatform {
-    // This is primarily for Web, but we define a default for consistency.
-    return const FirebaseOptions(
-      apiKey: 'YOUR_API_KEY', // <--- REPLACE THIS
-      appId: 'YOUR_APP_ID',   // <--- REPLACE THIS
-      messagingSenderId: 'YOUR_MESSAGING_SENDER_ID', // <--- REPLACE THIS
-      projectId: 'YOUR_PROJECT_ID', // <--- REPLACE THIS
-      authDomain: 'YOUR_AUTH_DOMAIN', // <--- REPLACE THIS
-      storageBucket: 'YOUR_STORAGE_BUCKET', // <--- REPLACE THIS
-    );
-  }
-}
 
-@pragma('vm:entry-point')
-Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
-  if (kIsWeb) return; // <--- NEW: Do nothing if on web (web SW handles it)
-  await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
-  print('Handling a background message in Dart: ${message.messageId}');
-}
+
 
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
-
-  // Set up background message handler only for non-web platforms,
-  // as web service worker handles its own background for basic display.
-  if (kIsWeb) {
-    await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
-  }
-
-  // Request notification permissions
-  // This is generally safe to call on all platforms. On web, this prompts the user.
-  await FirebaseMessaging.instance.requestPermission(
-    alert: true,
-    announcement: false,
-    badge: true,
-    carPlay: false,
-    criticalAlert: false,
-    provisional: false,
-    sound: true,
-  );
 
   runApp(
     MultiProvider(
@@ -137,97 +98,7 @@ class _MyAppState extends State<MyApp> {
   void initState() {
     super.initState();
     _initAuth = Provider.of<AuthProvider>(context, listen: false).autoLogin();
-    if (kIsWeb) {
-      _setupFirebaseMessaging();
-    } // <--- NEW: Setup foreground/background messaging
-  }
 
-   void _setupFirebaseMessaging() {
-    final AuthProvider authProvider = Provider.of<AuthProvider>(context, listen: false);
-
-    // Get initial token and send to backend if user is authenticated
-    FirebaseMessaging.instance.getToken().then((token) {
-      if (token != null && authProvider.isAuthenticated) {
-        print('DEBUG: FCM Web Token: $token');
-        String deviceInfo = 'Web Browser'; // Always 'Web Browser' for PWA
-        authProvider.authApi.registerFCMToken(token, deviceInfo: deviceInfo);
-      }
-    });
-
-    // Handle token refresh
-    FirebaseMessaging.instance.onTokenRefresh.listen((newToken) {
-      print('DEBUG: FCM Web Token Refreshed: $newToken');
-      if (authProvider.isAuthenticated) {
-        String deviceInfo = 'Web Browser';
-        authProvider.authApi.registerFCMToken(newToken, deviceInfo: deviceInfo);
-      }
-    });
-
-    // Handle messages when app is in foreground
-    FirebaseMessaging.onMessage.listen((RemoteMessage message) {
-      print('DEBUG: Got a message whilst in the foreground!');
-      print('DEBUG: Message data: ${message.data}');
-      if (message.notification != null) {
-        print('DEBUG: Message also contained a notification: ${message.notification}');
-        // Show a local notification or update UI directly
-        _showLocalNotification(message); // Example: show a simple snackbar/alert
-      }
-    });
-
-    // Handle interactions when app is in background/terminated and user taps notification
-    FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) {
-      print('DEBUG: onMessageOpenedApp: ${message.data}');
-      // Navigate to a specific screen based on message.data, e.g., schedule screen
-      _handleNotificationTap(message);
-    });
-
-    // Handle initial message when app is launched from terminated state via notification
-    FirebaseMessaging.instance.getInitialMessage().then((RemoteMessage? message) {
-      if (message != null) {
-        print('DEBUG: getInitialMessage: ${message.data}');
-        _handleNotificationTap(message);
-      }
-    });
-  }
-
-  // --- NEW: Example local notification/UI update ---
-  void _showLocalNotification(RemoteMessage message) {
-    if (message.notification != null && context.mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            '${message.notification!.title}: ${message.notification!.body}',
-          ),
-          action: SnackBarAction(
-            label: 'VIEW',
-            onPressed: () => _handleNotificationTap(message),
-          ),
-          duration: const Duration(seconds: 10),
-        ),
-      );
-    }
-  }
-
-  // --- NEW: Handle notification tap (navigation) ---
-  void _handleNotificationTap(RemoteMessage message) {
-    // Example: If message.data has "type": "schedule_published", navigate to schedule
-    if (message.data['type'] == 'schedule_published' && context.mounted) {
-      // TODO: Implement actual navigation to schedule screen
-      // For now, just show a dialog
-      showDialog(
-        context: context,
-        builder: (ctx) => AlertDialog(
-          title: Text(message.notification?.title ?? 'Notification'),
-          content: Text('Schedule published for role: ${message.data['role']} for week: ${message.data['week_start']}.'),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(ctx).pop(),
-              child: const Text('OK'),
-            ),
-          ],
-        ),
-      );
-    }
   }
 
   @override

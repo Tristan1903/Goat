@@ -3,6 +3,7 @@
 # ==============================================================================
 
 import os
+import io
 import json
 import re
 from datetime import date, datetime, timedelta, time
@@ -11,7 +12,6 @@ from werkzeug.utils import secure_filename
 from werkzeug.routing import BaseConverter
 from flask import (Flask, render_template, request, redirect, url_for,
                    flash, Response, jsonify, get_flashed_messages, send_from_directory, session, current_app)
-                    
 from flask_bcrypt import Bcrypt
 from flask_login import (LoginManager, UserMixin, login_user, logout_user,
                        current_user, login_required)
@@ -32,14 +32,11 @@ from .api.mobile import mobile_api_bp
 from flask_jwt_extended import JWTManager
 
 from .utils import (get_drive_service, upload_file_to_drive, append_eod_data_to_google_sheet,
-                 send_push_notification,
                  SCHEDULER_SHIFT_TYPES_GENERIC, ROLE_SHIFT_DEFINITIONS,
                  get_role_specific_shift_types, get_shift_time_display,
                  _build_week_dates,
                  MANUAL_CONTENT)
 
-import firebase_admin # <--- NEW IMPORT
-from firebase_admin import credentials, messaging
 
 # ==============================================================================
 # App Configuration
@@ -59,13 +56,6 @@ app.config.from_object(Config)
 
 CORS(app)
 
-if not firebase_admin._apps: # Check if app is already initialized to prevent re-initialization
-    try:
-        cred = credentials.Certificate(app.config['FIREBASE_SERVICE_ACCOUNT_KEY'])
-        firebase_admin.initialize_app(cred)
-        app.logger.info("Firebase Admin SDK initialized.")
-    except Exception as e:
-        app.logger.error(f"Failed to initialize Firebase Admin SDK: {e}", exc_info=True)
 
 # Initialize extensions
 db.init_app(app)
@@ -91,6 +81,117 @@ app.register_blueprint(mobile_api_bp)
 # ==============================================================================
 # Global Definitions (UPDATED/NEW)
 # ==============================================================================
+
+def _process_schedule_post_request(role_name, request_form, week_offset=0):
+    start_of_week, week_dates, end_of_week, _ = _build_week_dates(week_offset=week_offset)
+
+    # Determine which users belong to this role (including managers, GMs, system_admins for 'manager' role)
+    users_in_role_query = User.query.join(User.roles).filter(User.is_suspended == False)
+    if role_name == 'manager':
+        users_in_role_query = users_in_role_query.filter(
+            or_(Role.name == 'manager', Role.name == 'general_manager', Role.name == 'system_admin')
+        )
+    else:
+        users_in_role_query = users_in_role_query.filter(Role.name == role_name)
+
+    users_in_role = users_in_role_query.all()
+    user_ids_in_role = [u.id for u in users_in_role]
+
+    try:
+        # Delete existing published shifts for this role and week before saving new ones
+        Schedule.query.filter(
+            Schedule.shift_date >= start_of_week,
+            Schedule.shift_date <= end_of_week,
+            Schedule.user_id.in_(user_ids_in_role) if user_ids_in_role else False,
+            Schedule.published == True # Only delete published shifts
+        ).delete(synchronize_session=False)
+        db.session.flush()
+
+        # Delete any existing draft shifts for this role and week before saving new ones
+        Schedule.query.filter(
+            Schedule.shift_date >= start_of_week,
+            Schedule.shift_date <= end_of_week,
+            Schedule.user_id.in_(user_ids_in_role) if user_ids_in_role else False,
+            Schedule.published == False # Only delete draft shifts
+        ).delete(synchronize_session=False)
+        db.session.flush()
+
+        for user in users_in_role:
+            for day in week_dates:
+                # We skip Monday in the display, so only process days Tuesday-Sunday for consistency with the form
+                if day.weekday() == 0: continue
+
+                assigned_shift_type = request_form.get(f'assignment_{day.isoformat()}_{user.id}')
+
+                if assigned_shift_type and assigned_shift_type != "":
+                    start_time_str = None
+                    end_time_str = None
+
+                    if assigned_shift_type in SCHEDULER_SHIFT_TYPES_GENERIC:
+                        day_name = day.strftime('%A')
+                        role_specific_shift_types = get_role_specific_shift_types(role_name, day_name)
+
+                        if assigned_shift_type in role_specific_shift_types:
+                            role_def_for_day = ROLE_SHIFT_DEFINITIONS.get(role_name, {}).get(day_name) or ROLE_SHIFT_DEFINITIONS.get(role_name, {}).get('default', {})
+                            shift_times_def = role_def_for_day.get(assigned_shift_type, {})
+
+                            if shift_times_def.get('start') == 'Specified by Scheduler' or shift_times_def.get('end') == 'Specified by Scheduler':
+                                start_time_str = request_form.get(f'assignment_{day.isoformat()}_{user.id}_start_time')
+                                end_time_str = request.form.get(f'assignment_{day.isoformat()}_{user.id}_end_time')
+
+                                if not start_time_str or not end_time_str:
+                                    flash(f"Start and End times are required for {assigned_shift_type} on {day.strftime('%a, %b %d')} for {user.full_name}.", 'danger')
+                                    raise ValueError("Custom shift times missing")
+
+                    s = Schedule(
+                        shift_date=day,
+                        assigned_shift=assigned_shift_type,
+                        user_id=user.id,
+                        published=(request_form.get('action') == 'publish'),
+                        start_time_str=start_time_str,
+                        end_time_str=end_time_str
+                    )
+                    db.session.add(s)
+
+        db.session.commit()
+        if request_form.get('action') == 'publish':
+            flash(f'{role_name.title()} schedule saved and published.', 'success')
+            log_activity(f"Published {role_name.title()} schedule for week starting {start_of_week.strftime('%Y-%m-%d')}.")
+
+            users_to_notify_query = User.query.join(User.roles).filter(
+                Role.name == role_name,
+                User.is_suspended == False
+            )
+            # If manager schedule is published, also notify general managers and system admins
+            if role_name == 'manager':
+                users_to_notify_query = User.query.join(User.roles).filter(
+                    or_(Role.name == 'manager', Role.name == 'general_manager', Role.name == 'system_admin'),
+                    User.is_suspended == False
+                )
+
+            users_to_notify = users_to_notify_query.all()
+            for user_to_notify in users_to_notify:
+                send_onesignal_notification( # <--- CALL NEW FUNCTION
+                    user_to_notify.id,
+                    f"{role_name.title()} Schedule Published!",
+                    f"The new {role_name.title()} schedule for the week of {start_of_week.strftime('%b %d')} has been published. Check your schedule now!",
+                    data={"type": "schedule_published", "role": role_name, "week_start": start_of_week.isoformat(),
+                          "click_action": f"{current_app.config['FLASK_WEB_BASE_URL']}/static/web/#/my_schedule"}
+                )
+        else:
+            flash(f'{role_name.title()} schedule draft saved.', 'info')
+            log_activity(f"Saved draft for {role_name.title()} schedule for week starting {start_of_week.strftime('%Y-%m-%d')}.")
+        return True
+    except ValueError as ve:
+        db.session.rollback()
+        flash(f'Failed to save {role_name} schedule: {ve}', 'danger')
+        app.logger.error(f"Failed to save {role_name} schedule (ValueError): {ve}")
+        return False
+    except Exception as e:
+        db.session.rollback()
+        flash(f'Failed to save {role_name} schedule due to an unexpected error: {e}', 'danger')
+        app.logger.exception(f"Error saving {role_name} schedule.")
+        return False
 
 class OptionalIntConverter(BaseConverter):
     """
@@ -249,6 +350,22 @@ def load_user(user_id):
 # Helper Functions & Decorators
 # ==============================================================================
 
+@app.errorhandler(404)
+def page_not_found(e):
+    app.logger.warning(f"404 Not Found: {request.url}")
+    # Pass theme colors to the 404 template
+    return render_template('404.html',
+                           config={'FLASK_WEB_THEME_PRIMARY_COLOR': app.config['FLASK_WEB_THEME_PRIMARY_COLOR'],
+                                   'FLASK_WEB_THEME_ACCENT_COLOR': app.config['FLASK_WEB_THEME_ACCENT_COLOR']}), 404
+
+@app.errorhandler(500)
+def internal_server_error(e):
+    app.logger.error(f"500 Internal Server Error: {request.url} - {e}", exc_info=True)
+    # Pass theme colors to the 404 template (can reuse 404 template for 500)
+    return render_template('404.html',
+                           config={'FLASK_WEB_THEME_PRIMARY_COLOR': app.config['FLASK_WEB_THEME_PRIMARY_COLOR'],
+                                   'FLASK_WEB_THEME_ACCENT_COLOR': app.config['FLASK_WEB_THEME_ACCENT_COLOR']}), 500
+
 app.jinja_env.filters['slugify'] = slugify
 
 # MODIFIED: Function to send the EOD report email
@@ -340,7 +457,6 @@ def send_eod_report_email(report_data, manager_name, image_links, recipient_emai
         flash(f"Failed to send email copy of the report: {e}", 'danger')
         return False
 
-SCHEDULER_SHIFT_TYPES = ['Day', 'Night', 'Double', 'Open', 'Split Double'] # ADDED 'Open', 'Split Double'
 STAFF_SUBMISSION_SHIFT_TYPES = ['Day', 'Night', 'Double'] # Staff only submit for standard types
 
 
@@ -464,116 +580,6 @@ def _render_scheduler_for_role(role_name, role_label, week_offset=0):
         current_week_offset=week_offset, # NEW: Pass current week offset
         submitted_users_for_week=submitted_users_details # NEW: Pass users who submitted shifts for this week
     )
-
-def _process_schedule_post_request(role_name, request_form, week_offset=0):
-    start_of_week, week_dates, end_of_week, _ = _build_week_dates(week_offset=week_offset)
-
-    # Determine which users belong to this role (including managers, GMs, system_admins for 'manager' role)
-    users_in_role_query = User.query.join(User.roles).filter(User.is_suspended == False)
-    if role_name == 'manager':
-        users_in_role_query = users_in_role_query.filter(
-            or_(Role.name == 'manager', Role.name == 'general_manager', Role.name == 'system_admin')
-        )
-    else:
-        users_in_role_query = users_in_role_query.filter(Role.name == role_name)
-
-    users_in_role = users_in_role_query.all()
-    user_ids_in_role = [u.id for u in users_in_role]
-
-    try:
-        # Delete existing published shifts for this role and week before saving new ones
-        Schedule.query.filter(
-            Schedule.shift_date >= start_of_week,
-            Schedule.shift_date <= end_of_week,
-            Schedule.user_id.in_(user_ids_in_role) if user_ids_in_role else False,
-            Schedule.published == True # Only delete published shifts
-        ).delete(synchronize_session=False)
-        db.session.flush()
-
-        # Delete any existing draft shifts for this role and week before saving new ones
-        Schedule.query.filter(
-            Schedule.shift_date >= start_of_week,
-            Schedule.shift_date <= end_of_week,
-            Schedule.user_id.in_(user_ids_in_role) if user_ids_in_role else False,
-            Schedule.published == False # Only delete draft shifts
-        ).delete(synchronize_session=False)
-        db.session.flush()
-
-        for user in users_in_role:
-            for day in week_dates:
-                # We skip Monday in the display, so only process days Tuesday-Sunday for consistency with the form
-                if day.weekday() == 0: continue
-
-                assigned_shift_type = request_form.get(f'assignment_{day.isoformat()}_{user.id}')
-
-                if assigned_shift_type and assigned_shift_type != "":
-                    start_time_str = None
-                    end_time_str = None
-
-                    if assigned_shift_type in SCHEDULER_SHIFT_TYPES_GENERIC:
-                        day_name = day.strftime('%A')
-                        role_specific_shift_types = get_role_specific_shift_types(role_name, day_name)
-
-                        if assigned_shift_type in role_specific_shift_types:
-                            role_def_for_day = ROLE_SHIFT_DEFINITIONS.get(role_name, {}).get(day_name) or ROLE_SHIFT_DEFINITIONS.get(role_name, {}).get('default', {})
-                            shift_times_def = role_def_for_day.get(assigned_shift_type, {})
-
-                            if shift_times_def.get('start') == 'Specified by Scheduler' or shift_times_def.get('end') == 'Specified by Scheduler':
-                                start_time_str = request_form.get(f'assignment_{day.isoformat()}_{user.id}_start_time')
-                                end_time_str = request.form.get(f'assignment_{day.isoformat()}_{user.id}_end_time')
-
-                                if not start_time_str or not end_time_str:
-                                    flash(f"Start and End times are required for {assigned_shift_type} on {day.strftime('%a, %b %d')} for {user.full_name}.", 'danger')
-                                    raise ValueError("Custom shift times missing")
-
-                    s = Schedule(
-                        shift_date=day,
-                        assigned_shift=assigned_shift_type,
-                        user_id=user.id,
-                        published=(request_form.get('action') == 'publish'),
-                        start_time_str=start_time_str,
-                        end_time_str=end_time_str
-                    )
-                    db.session.add(s)
-
-        db.session.commit()
-        if request_form.get('action') == 'publish':
-            flash(f'{role_name.title()} schedule saved and published.', 'success')
-            log_activity(f"Published {role_name.title()} schedule for week starting {start_of_week.strftime('%Y-%m-%d')}.")
-
-            users_to_notify_query = User.query.join(User.roles).filter(
-                Role.name == role_name,
-                User.is_suspended == False
-            )
-            # If manager schedule is published, also notify general managers and system admins
-            if role_name == 'manager':
-                users_to_notify_query = User.query.join(User.roles).filter(
-                    or_(Role.name == 'manager', Role.name == 'general_manager', Role.name == 'system_admin'),
-                    User.is_suspended == False
-                )
-
-            users_to_notify = users_to_notify_query.all()
-            for user_to_notify in users_to_notify:
-                send_push_notification(
-                    user_to_notify.id,
-                    f"{role_name.title()} Schedule Published!",
-                    f"The new {role_name.title()} schedule for the week of {start_of_week.strftime('%b %d')} has been published. Check your schedule now!",
-                    data={"type": "schedule_published", "role": role_name, "week_start": start_of_week.isoformat()}
-                )                
-        else:
-            flash(f'{role_name.title()} schedule draft saved.', 'info')
-            log_activity(f"Saved draft for {role_name.title()} schedule for week starting {start_of_week.strftime('%Y-%m-%d')}.")
-        return True
-    except ValueError as ve:
-        db.session.rollback()
-        flash(f'Failed to save {role_name} schedule: {ve}', 'danger')
-        app.logger.error(f"Failed to save {role_name} schedule (ValueError): {ve}")
-        return False
-    except Exception as e:
-        db.session.rollback()
-        flash(f'Failed to save {role_name} schedule due to an unexpected error: {e}', 'danger')
-        app.logger.exception(f"Error saving {role_name} schedule.")
-        return False
 
 def _calculate_ingredient_usage_from_cocktails_sold(target_date):
     """
@@ -3006,15 +3012,7 @@ def submit_shifts():
     is_submission_window_open = (current_utc_time >= submission_window_start and
                                  current_utc_time <= submission_window_end)
 
-    # These timedelta objects are no longer needed directly by the template for the timer.
-    # The template will use the ISO string formats of submission_window_start/end.
-    # time_until_window_opens = None
-    # time_until_window_closes = None
-    # if current_utc_time < submission_window_start:
-    #     time_until_window_opens = submission_window_start - current_utc_time
-    # elif current_utc_time < submission_window_end:
-    #     time_until_window_closes = submission_window_end - current_utc_time
-
+    # MODIFIED: Only Day/Night availability for staff submission
     staff_submission_shift_types = ['Day', 'Night']
 
     existing_submissions = ShiftSubmission.query.filter(
@@ -3319,12 +3317,15 @@ def my_schedule():
                 'shift_date': shift.shift_date.isoformat() if shift.shift_date else None,
                 'start_time_str': shift.start_time_str,
                 'end_time_str': shift.end_time_str,
+                # MODIFIED: Use requester_schedule_id for filtering swap requests
                 'swap_requests': [
                     {
                         'id': req.id,
                         'status': req.status,
-                        'coverer': {'id': req.coverer.id, 'full_name': req.coverer.full_name} if req.coverer else None
-                    } for req in shift.swap_requests
+                        'coverer': {'id': req.coverer_user.id, 'full_name': req.coverer_user.full_name} if req.coverer_user else None,
+                        'swap_part': req.swap_part, # NEW: Include swap_part
+                        'coverer_assigned_schedule_id': req.coverer_assigned_schedule_id, # NEW: Include coverer's requested shift
+                    } for req in ShiftSwapRequest.query.filter_by(requester_schedule_id=shift.id, requester_id=current_user.id).all()
                 ],
                 'volunteered_cycle': {
                     'status': shift.volunteered_cycle.status
@@ -3347,7 +3348,24 @@ def my_schedule():
         ).all()
         for shift in staff_shifts_for_user:
             staff_schedules_for_week[staff_user.id][shift.shift_date.isoformat()].append(
-                {'id': shift.id, 'assigned_shift': shift.assigned_shift, 'shift_date': shift.shift_date.isoformat()}
+                {'id': shift.id, 
+                 'assigned_shift': shift.assigned_shift, 
+                 'shift_date': shift.shift_date.isoformat(),
+                 'start_time_str': shift.start_time_str, # NEW: Include times for coverer's shifts
+                 'end_time_str': shift.end_time_str, # NEW: Include times for coverer's shifts
+                 # MODIFIED: Filter coverer's existing swap requests by their shift ID
+                 'swap_requests': [
+                    {
+                        'id': req.id,
+                        'status': req.status,
+                        'requester': {'id': req.requester_user.id, 'full_name': req.requester_user.full_name} if req.requester_user else None,
+                        'swap_part': req.swap_part,
+                    } for req in ShiftSwapRequest.query.filter_by(requester_schedule_id=shift.id, requester_id=staff_user.id).all()
+                 ],
+                 'volunteered_cycle': {
+                    'status': shift.volunteered_cycle.status
+                } if shift.volunteered_cycle else None
+                }
             )
 
     current_user_roles_list = [role.name for role in current_user.roles]
@@ -3551,18 +3569,19 @@ def submit_new_swap_request():
     data = request.get_json() if request.is_json else request.form
     requester_schedule_id = data.get('requester_schedule_id', type=int)
     desired_cover_id = data.get('desired_cover_id', type=int)
+    swap_part = data.get('swap_part', 'full') # 'full', 'day', 'night'
+    coverer_schedule_id = data.get('coverer_schedule_id', type=int) # The shift the requester wants from coverer
 
     if not requester_schedule_id or not desired_cover_id:
-        flash('Invalid swap request. Please select a shift and a potential cover.', 'danger')
-        # For API, we'd return JSON error. For web, redirect.
+        flash('Invalid swap request. Please select your shift and a potential coverer.', 'danger')
         if request.is_json:
-            return jsonify({"msg": "Invalid swap request. Missing shift or cover."}), 400
+            return jsonify({"msg": "Invalid swap request. Missing requester's shift or desired coverer."}), 400
         return redirect(url_for('my_schedule', view='personal'))
 
-    schedule_item = Schedule.query.get_or_404(requester_schedule_id)
+    requester_schedule_item = Schedule.query.get_or_404(requester_schedule_id)
     desired_cover_user = User.query.get(desired_cover_id)
 
-    if schedule_item.user_id != current_user.id:
+    if requester_schedule_item.user_id != current_user.id:
         flash('You can only request to swap your own shifts.', 'danger')
         return redirect(url_for('my_schedule', view='personal'))
 
@@ -3570,34 +3589,73 @@ def submit_new_swap_request():
         flash('Selected potential cover staff not found.', 'danger')
         return redirect(url_for('my_schedule', view='personal'))
 
-    existing_request = ShiftSwapRequest.query.filter_by(schedule_id=requester_schedule_id, status='Pending').first()
-    if existing_request:
+    # Check for existing pending request on the requester's shift
+    existing_request_on_requester_shift = ShiftSwapRequest.query.filter_by(requester_schedule_id=requester_schedule_id, status='Pending').first()
+    if existing_request_on_requester_shift:
         flash('A swap request for this shift is already pending.', 'info')
         return redirect(url_for('my_schedule', view='personal'))
 
+    # If a specific coverer's shift is chosen, fetch it and check for conflicts/pending requests
+    coverer_assigned_schedule_item = None
+    if coverer_schedule_id:
+        coverer_assigned_schedule_item = Schedule.query.get(coverer_schedule_id)
+        if not coverer_assigned_schedule_item:
+            flash("The selected coverer's shift was not found.", 'danger')
+            return redirect(url_for('my_schedule', view='personal'))
+        if coverer_assigned_schedule_item.user_id != desired_cover_user.id:
+            flash("The selected coverer's shift does not belong to the desired coverer.", 'danger')
+            return redirect(url_for('my_schedule', view='personal'))
+        # Basic date check: ensure both shifts are on the same day for a sensible swap
+        if requester_schedule_item.shift_date != coverer_assigned_schedule_item.shift_date:
+            flash("For a two-way swap, both shifts must be on the same date.", 'danger')
+            return redirect(url_for('my_schedule', view='personal'))
+        
+        # Check if the coverer's shift itself is already involved in a pending swap as a requester
+        existing_request_on_coverer_shift = ShiftSwapRequest.query.filter_by(requester_schedule_id=coverer_assigned_schedule_item.id, status='Pending').first()
+        if existing_request_on_coverer_shift:
+            flash(f"The coverer's selected shift ({coverer_assigned_schedule_item.assigned_shift} on {coverer_assigned_schedule_item.shift_date.strftime('%a, %b %d')}) is already part of another pending swap request.", 'info')
+            return redirect(url_for('my_schedule', view='personal'))
 
-
-    # Create the new swap request, including the desired coverer
-    # This acts as a suggestion for the manager, not a binding assignment yet
+    # Create the new swap request, including the desired coverer and swap_part
     new_swap_request = ShiftSwapRequest(
-        schedule_id=requester_schedule_id,
+        requester_schedule_id=requester_schedule_id, # This is the requester's shift being offered
+        coverer_assigned_schedule_id=coverer_assigned_schedule_id, # The shift requester wants to take
         requester_id=current_user.id,
-        coverer_id=desired_cover_user.id # Store the suggested coverer
+        coverer_id=desired_cover_user.id, # The suggested coverer
+        swap_part=swap_part # Store 'full', 'day', or 'night'
     )
     db.session.add(new_swap_request)
 
-    shift_date_str = schedule_item.shift_date.strftime('%a, %b %d')
+    # Construct an informative announcement message
+    shift_date_str = requester_schedule_item.shift_date.strftime('%a, %b %d')
     announcement_title = "New Shift Swap Request"
-    announcement_message = f"{current_user.full_name} has requested to swap their {schedule_item.assigned_shift} shift on {shift_date_str}. They suggest {desired_cover_user.full_name} as a cover."
+    announcement_message = (
+        f"{current_user.full_name} has requested to swap their {requester_schedule_item.assigned_shift}"
+    )
+
+    if requester_schedule_item.assigned_shift == 'Double' and swap_part != 'full':
+        announcement_message += f" ({swap_part.title()} Part Only)"
+
+    announcement_message += f" on {shift_date_str} with {desired_cover_user.full_name}."
+
+    if coverer_assigned_schedule_item:
+        announcement_message += (
+            f" {current_user.full_name} wishes to take {desired_cover_user.full_name}'s "
+            f"{coverer_assigned_schedule_item.assigned_shift} shift in return."
+        )
+    else:
+        announcement_message += " No specific shift from the coverer was requested in return."
+
     new_announcement = Announcement(user_id=current_user.id, title=announcement_title, message=announcement_message, category='Urgent')
     db.session.add(new_announcement)
 
     db.session.commit()
-    log_activity(f"Requested a shift swap for {schedule_item.assigned_shift} on {shift_date_str}, suggesting {desired_cover_user.full_name}.")
+    log_activity(f"Requested a shift swap for {requester_schedule_item.assigned_shift} on {shift_date_str}, suggesting {desired_cover_user.full_name}.")
     if request.is_json:
         return jsonify({"msg": "Your swap request has been submitted. A manager will be notified."}), 201
     flash('Your swap request has been submitted. A manager will be notified.', 'success')
     return redirect(url_for('my_schedule', view='personal'))
+
 
 @app.route('/relinquish_shift', methods=['POST'])
 @login_required
@@ -3622,7 +3680,7 @@ def relinquish_shift():
 
     # 2. Check if this shift is already pending a swap or a volunteer cycle
     # (The frontend should filter this, but backend check is crucial for safety)
-    existing_swap_request = ShiftSwapRequest.query.filter_by(schedule_id=schedule_id, status='Pending').first()
+    existing_swap_request = ShiftSwapRequest.query.filter_by(requester_schedule_id=schedule_id, status='Pending').first()
     existing_volunteered_cycle = VolunteeredShift.query.filter_by(schedule_id=schedule_id).first() # Any status
 
     if existing_swap_request:
@@ -3677,10 +3735,10 @@ def manage_swaps():
     week_end = week_dates[-1]
 
     # Fetch all pending swaps
-    # MODIFIED: Filter out swaps with missing schedules early
+    # MODIFIED: Filter out swaps with missing requester_shift early
     pending_swaps_raw = [
         s for s in ShiftSwapRequest.query.filter_by(status='Pending').order_by(ShiftSwapRequest.timestamp.desc()).all()
-        if s.schedule is not None
+        if s.requester_shift is not None
     ]
 
     # Fetch all potential cover staff once
@@ -3706,10 +3764,10 @@ def manage_swaps():
 
     # Now, process each pending swap to attach its filtered staff options
     processed_pending_swaps = []
-    for swap in pending_swaps_raw: # pending_swaps_raw is already filtered for None.
-        requester_roles = swap.requester.role_names
-        requested_shift_date_iso = swap.schedule.shift_date.isoformat()
-        requested_shift_type = swap.schedule.assigned_shift
+    for swap in pending_swaps_raw: 
+        requester_roles = swap.requester_user.role_names # MODIFIED: Changed to requester_user
+        requested_shift_date_iso = swap.requester_shift.shift_date.isoformat() # MODIFIED: Changed to requester_shift
+        requested_shift_type = swap.requester_shift.assigned_shift # MODIFIED: Changed to requester_shift
 
         filtered_staff_for_this_swap = []
         for potential_cover in all_potential_cover_staff:
@@ -3724,30 +3782,58 @@ def manage_swaps():
                 continue
 
             # 3. Check for shift conflicts for the requested shift date and type
+            # This conflict check is for the shift the *requester* is offering.
+            # We also need to consider conflicts if this is a two-way swap.
             coverer_schedule_for_requested_day = staff_schedules_lookup.get(potential_cover.id, {}).get(requested_shift_date_iso, [])
-            conflict = False
+            conflict_with_requester_offering = False
+
+            # Simplified shift types for conflict checking
+            current_shift_types_for_conflict_check = ['Day', 'Night', 'Double'] 
 
             if requested_shift_type == 'Double':
-                # If requested shift is 'Double', coverer must be OFF for the entire day
+                # If requested shift is 'Double', coverer must be OFF for the entire day (i.e., no assigned shifts)
                 if coverer_schedule_for_requested_day and len(coverer_schedule_for_requested_day) > 0:
-                    conflict = True
-            else:
-                # For 'Day' or 'Night' shifts, check if coverer has any conflicting shift
-                conflict = any(
+                    conflict_with_requester_offering = True
+            else: # Day or Night
+                conflict_with_requester_offering = any(
                     s['assigned_shift'] == 'Double' or s['assigned_shift'] == requested_shift_type
                     for s in coverer_schedule_for_requested_day
                 )
 
-            if not conflict:
+            # If there's no conflict with the shift the requester is *giving up*,
+            # then this potential_cover can be considered.
+            if not conflict_with_requester_offering:
                 filtered_staff_for_this_swap.append(potential_cover)
 
-        # Attach the filtered staff list to the swap object
-        processed_pending_swaps.append({'swap': swap, 'filtered_staff': filtered_staff_for_this_swap})
+        # Attach the filtered staff list to the swap object, along with available shifts from them
+        staff_options_with_shifts = []
+        for staff in filtered_staff_for_this_swap:
+            staff_day_shifts = Schedule.query.filter(
+                Schedule.user_id == staff.id,
+                Schedule.shift_date == swap.requester_shift.shift_date, # MODIFIED: Use requester_shift.shift_date
+                Schedule.published == True,
+                # Also check if this shift itself isn't already part of a pending swap as a requester
+                ~Schedule.swap_requests_as_requester.any(ShiftSwapRequest.status == 'Pending') # MODIFIED: Use new backref
+            ).all()
+            # Filter out shifts that conflict with the requester's desired shift part (if requester has coverer_assigned_schedule_id)
+            # This logic is more complex for manager view, but simplified for initial population:
+            # For now, just show the staff and their shifts. Manager decides on actual conflict.
+            
+            # The manager's UI needs to be able to select one of these staff_day_shifts
+            staff_options_with_shifts.append({
+                'user': staff,
+                'available_shifts_on_day': staff_day_shifts # These are the shifts the coverer *has* on that day
+            })
+        
+        processed_pending_swaps.append({
+            'swap': swap,
+            'filtered_staff_options': staff_options_with_shifts # MODIFIED: Renamed from filtered_staff
+        })
 
     # Fetch all swaps (including approved/denied) for history display
-    # MODIFIED: Filter out swaps with missing schedules for all_swaps too
+    # MODIFIED: Filter out swaps with missing requester_shift for all_swaps too
     all_swaps_raw = ShiftSwapRequest.query.order_by(ShiftSwapRequest.timestamp.desc()).all()
-    all_swaps = [s for s in all_swaps_raw if s.schedule is not None]
+    all_swaps = [s for s in all_swaps_raw if s.requester_shift is not None]
 
 
     return render_template(
@@ -3763,8 +3849,9 @@ def update_swap(swap_id):
     swap_request = ShiftSwapRequest.query.get_or_404(swap_id)
     action = request.form.get('action')
 
-    schedule_item = swap_request.schedule
-    requester = swap_request.requester
+    requester_original_shift = swap_request.requester_shift # The shift the requester is offering to give up
+    requester_user = swap_request.requester_user
+    suggested_coverer_user = swap_request.coverer_user
 
     notification_title = ""
     notification_message = ""
@@ -3772,52 +3859,122 @@ def update_swap(swap_id):
     if action == 'Deny':
         swap_request.status = 'Denied'
         notification_title = "Shift Swap Request Denied"
-        notification_message = f"Your request to swap the {schedule_item.assigned_shift} shift on {schedule_item.shift_date.strftime('%a, %b %d')} has been denied."
-        # No general announcement for deny, only individual notification (handled by flash to requester)
-
+        notification_message = (
+            f"Your request to swap the {requester_original_shift.assigned_shift} shift on "
+            f"{requester_original_shift.shift_date.strftime('%a, %b %d')}"
+        )
+        if swap_request.swap_part != 'full':
+            notification_message += f" ({swap_request.swap_part.title()} Part)"
+        notification_message += " has been denied."
+        
         flash('Shift swap request has been denied.', 'warning')
-        log_activity(f"Denied shift swap request #{swap_request.id} for {requester.full_name}'s shift on {schedule_item.shift_date}.")
+        log_activity(f"Denied shift swap request #{swap_request.id} for {requester_user.full_name}'s shift on {requester_original_shift.shift_date}.")
 
     elif action == 'Approve':
-        coverer_id = request.form.get('coverer_id')
-        if not coverer_id:
-            flash('You must select a staff member to cover the shift to approve.', 'danger')
+        approved_coverer_id = request.form.get('approved_coverer_id', type=int)
+        approved_coverer_take_shift_id = request.form.get('approved_coverer_take_shift_id', type=int) # The ID of the shift the coverer will *take* from requester
+        requester_take_shift_id = request.form.get('requester_take_shift_id', type=int) # The ID of the shift the requester will *take* from coverer
+
+        if not approved_coverer_id:
+            flash('You must select a staff member to approve as the coverer.', 'danger')
+            return redirect(url_for('manage_swaps'))
+        
+        final_coverer_user = User.query.get(approved_coverer_id)
+        if not final_coverer_user:
+            flash('Approved cover staff not found.', 'danger')
             return redirect(url_for('manage_swaps'))
 
-        coverer = User.query.get(int(coverer_id))
-        if not coverer:
-            flash('Selected cover staff not found.', 'danger')
-            return redirect(url_for('manage_swaps'))
+        # Perform the actual shift swap
+        # 1. Update the requester's original shift to the final coverer
+        requester_original_shift.user_id = final_coverer_user.id
+
+        # 2. If it's a two-way swap, update the coverer's chosen shift to the requester
+        if requester_take_shift_id:
+            coverer_offered_shift = Schedule.query.get(requester_take_shift_id)
+            if not coverer_offered_shift:
+                flash("The coverer's shift selected for the requester to take was not found.", 'danger')
+                db.session.rollback()
+                return redirect(url_for('manage_swaps'))
+            
+            coverer_offered_shift.user_id = requester_user.id
+            swap_request.coverer_assigned_schedule_id = requester_take_shift_id # Store the actually approved coverer's shift ID
 
         swap_request.status = 'Approved'
-        swap_request.coverer_id = coverer.id
+        swap_request.coverer_id = final_coverer_user.id # Confirm who ultimately took it
 
-        schedule_item.user_id = coverer.id
-
+        # Construct general announcement
         notification_title = "Shift Swap Request Approved"
-        notification_message = f"The {schedule_item.assigned_shift} shift on {schedule_item.shift_date.strftime('%a, %b %d')} is now covered by {coverer.full_name}. Original assignee: {requester.full_name}."
+        notification_message = (
+            f"The {requester_original_shift.assigned_shift} shift on "
+            f"{requester_original_shift.shift_date.strftime('%a, %b %d')} "
+            f"(originally assigned to {requester_user.full_name})"
+        )
+        if swap_request.swap_part != 'full':
+            notification_message += f" ({swap_request.swap_part.title()} Part)"
+        
+        notification_message += f" is now covered by {final_coverer_user.full_name}."
 
-        # Create an urgent announcement for all relevant roles for approval
+        if requester_take_shift_id and coverer_offered_shift:
+            notification_message += (
+                f" In return, {requester_user.full_name} will take {final_coverer_user.full_name}'s "
+                f"{coverer_offered_shift.assigned_shift} shift on the same day."
+            )
+
         general_announcement = Announcement(
             user_id=current_user.id, # Manager who made the decision
             title=notification_title,
             message=notification_message,
-            category='Urgent' # Important notification for all affected
+            category='Urgent'
         )
-        db.session.add(general_announcement) # Add to session
+        db.session.add(general_announcement)
 
         flash('Shift swap approved and schedule has been updated.', 'success')
-        log_activity(f"Approved shift swap request #{swap_request.id}: {coverer.full_name} now covers {requester.full_name}'s shift on {schedule_item.shift_date}.")
+        log_activity(f"Approved shift swap request #{swap_request.id}: {final_coverer_user.full_name} now covers {requester_user.full_name}'s shift on {requester_original_shift.shift_date}.")
 
-    db.session.commit() # Commit all changes (swap status, schedule update, and announcements)
+    db.session.commit()
 
-    # For Deny, explicitly flash to requester. For Approve, the general announcement covers it.
     if action == 'Deny':
-        # If a manager denies, the flash message handled above is usually sufficient
-        # but if we wanted a truly "private" notification for the requester, we would need
-        # a dedicated UserNotification table or similar. For now, the "flash" mechanism
-        # is the most direct way to get a message to the user on their next page load.
-        pass # Flash already handled, no new Announcement for Deny to broad audience
+        pass
+    else: # Approved
+        # Also notify the original requester and the new coverer individually
+        requester_notification_message = (
+            f"Your request to swap the {requester_original_shift.assigned_shift} shift on "
+            f"{requester_original_shift.shift_date.strftime('%a, %b %d')}"
+        )
+        if swap_request.swap_part != 'full':
+            requester_notification_message += f" ({swap_request.swap_part.title()} Part)"
+        requester_notification_message += f" has been APPROVED. {final_coverer_user.full_name} will cover it."
+
+        if requester_take_shift_id and coverer_offered_shift:
+            requester_notification_message += (
+                f" You will also take {final_coverer_user.full_name}'s {coverer_offered_shift.assigned_shift} shift."
+            )
+
+        requester_notification = Announcement(
+            user_id=requester_user.id,
+            title="Your Shift Swap Approved!",
+            message=requester_notification_message,
+            category='Alert'
+        )
+        db.session.add(requester_notification)
+
+        coverer_notification_message = (
+            f"Your manager has approved you to cover the {requester_original_shift.assigned_shift} shift on "
+            f"{requester_original_shift.shift_date.strftime('%a, %b %d')} (originally {requester_user.full_name}'s shift)."
+        )
+        if requester_take_shift_id and coverer_offered_shift:
+            coverer_notification_message += (
+                f" You will also give your {coverer_offered_shift.assigned_shift} shift to {requester_user.full_name}."
+            )
+
+        coverer_notification = Announcement(
+            user_id=final_coverer_user.id,
+            title="Shift Swap Approved!",
+            message=coverer_notification_message,
+            category='Alert'
+        )
+        db.session.add(coverer_notification)
+        db.session.commit()
 
     return redirect(url_for('manage_swaps'))
 

@@ -23,6 +23,37 @@
         border-bottom: 1px solid #dee2e6;
         border-top: 1px solid #dee2e6;
     }
+    /* Style for shift assignment buttons */
+    .shift-assign-btn {
+        margin-right: 5px; /* Space between buttons */
+        margin-bottom: 5px; /* Space below buttons */
+        min-width: 70px; /* Ensure buttons have a minimum width */
+    }
+    .shift-assign-btn.active-day {
+        background-color: #add8e6; /* Light blue */
+        border-color: #add8e6;
+        color: #333;
+    }
+    .shift-assign-btn.active-night {
+        background-color: #4682b4; /* Steel blue */
+        border-color: #4682b4;
+        color: white;
+    }
+    .shift-assign-btn.active-double {
+        background-color: #00008b; /* Dark blue */
+        border-color: #00008b;
+        color: white;
+    }
+    .shift-assign-btn.active-split-double {
+        background-color: #8a2be2; /* BlueViolet */
+        border-color: #8a2be2;
+        color: white;
+    }
+    .shift-assign-btn.active-open {
+        background-color: #ffc107; /* Amber/Orange */
+        border-color: #ffc107;
+        color: #333;
+    }
 </style>
 
 <div class="container-fluid mt-4">
@@ -111,9 +142,11 @@
                                       <strong>{{ day_name }}</strong>
                                       <ul class="list-unstyled mb-0">
                                           {% for st in scheduler_shift_types_generic %}
-                                              {% set times = day_specific_defs.get(st) %}
-                                              {% if times %}
-                                                  <li>{{ st }}: {{ times.start }} - {{ times.end }}</li>
+                                              {% if st in available_shifts_for_day_role %}
+                                                  {% set times = day_specific_defs.get(st) %}
+                                                  {% if times %}
+                                                      <li>{{ st }}: {{ times.start }} - {{ times.end }}</li>
+                                                  {% endif %}
                                               {% endif %}
                                           {% endfor %}
                                       </ul>
@@ -173,43 +206,63 @@
                               {% endif %}
                           </div>
 
-                          <div class="assign-controls">
-                              <select name="assignment_{{ day_iso }}_{{ user.id }}"
-                                      class="form-select form-select-sm shift-assignment-select"
-                                      data-user-id="{{ user.id }}"
-                                      data-day-iso="{{ day_iso }}"
-                                      data-current-start-time="{{ current_assignment.start_time_str if current_assignment else '' }}"
-                                      data-current-end-time="{{ current_assignment.end_time_str if current_assignment else '' }}">
-                                  <option value="">Not Scheduled</option>
-                                  {% set day_name = day.strftime('%A') %}
-                                  {% set available_shifts_for_day_role = get_role_specific_shift_types(role_name, day_name) %}
+                          <div class="btn-group-vertical assign-controls" role="group" aria-label="Shift Assignment">
+                              {% set day_name = day.strftime('%A') %}
+                              {% set available_shifts_for_day_role = get_role_specific_shift_types(role_name, day_name) %}
 
-                                  {% for st in scheduler_shift_types_generic %}
-                                      {% if st in available_shifts_for_day_role %}
-                                          {% set shift_time_display = get_shift_time_display(role_name, day_name, st) %}
-                                          <option value="{{ st }}" {% if current_assignment and current_assignment.assigned_shift == st %}selected{% endif %}>
-                                              {{ st }} {{ shift_time_display }}
-                                          </option>
-                                      {% endif %}
-                                  {% endfor %}
-                              </select>
-                              <input type="hidden"
-                                     name="assignment_{{ day_iso }}_{{ user.id }}_start_time"
-                                     class="custom-start-time"
-                                     value="{{ current_assignment.start_time_str if current_assignment else '' }}">
-                              <input type="hidden"
-                                     name="assignment_{{ day_iso }}_{{ user.id }}_end_time"
-                                     class="custom-end-time"
-                                     value="{{ current_assignment.end_time_str if current_assignment else '' }}">
+                              {% for st in ['Day', 'Night', 'Double', 'Split Double', 'Open'] %} {# Only these types for buttons #}
+                                  {% if st in available_shifts_for_day_role %}
+                                      {% set shift_time_display = get_shift_time_display(role_name, day_name, st) %}
+                                      <button type="button"
+                                              class="btn btn-sm shift-assign-btn
+                                                  {% if current_assignment and current_assignment.assigned_shift == st %}
+                                                      {% if st == 'Day' %}active-day
+                                                      {% elif st == 'Night' %}active-night
+                                                      {% elif st == 'Double' or st == 'Double A' or st == 'Double B' %}active-double
+                                                      {% elif st == 'Split Double' %}active-split-double
+                                                      {% elif st == 'Open' %}active-open
+                                                      {% endif %}
+                                                  {% endif %}"
+                                              data-shift-type="{{ st }}"
+                                              data-user-id="{{ user.id }}"
+                                              data-day-iso="{{ day_iso }}"
+                                              data-user-full-name="{{ user.full_name }}"
+                                              data-day-name="{{ day_name }}"
+                                              data-predefined-start="{{ shift_time_display.split(' - ')[0].replace('(','') if shift_time_display else '' }}"
+                                              data-predefined-end="{{ shift_time_display.split(' - ')[1].replace(')','') if shift_time_display and ' - ' in shift_time_display else '' }}"
+                                              >
+                                          {{ st }}
+                                      </button>
+                                  {% endif %}
+                              {% endfor %}
+                              <button type="button"
+                                      class="btn btn-sm btn-outline-secondary clear-shift-btn"
+                                      data-user-id="{{ user.id }}"
+                                      data-day-iso="{{ day_iso }}">
+                                  Clear
+                              </button>
                           </div>
 
-                           <div class="mt-2 small text-muted">
+                          {# Hidden inputs for the actual form submission #}
+                          <input type="hidden"
+                                 name="assignment_{{ day_iso }}_{{ user.id }}"
+                                 class="assigned-shift-type"
+                                 value="{{ current_assignment.assigned_shift if current_assignment else '' }}">
+                          <input type="hidden"
+                                 name="assignment_{{ day_iso }}_{{ user.id }}_start_time"
+                                 class="custom-start-time"
+                                 value="{{ current_assignment.start_time_str if current_assignment else '' }}">
+                          <input type="hidden"
+                                 name="assignment_{{ day_iso }}_{{ user.id }}_end_time"
+                                 class="custom-end-time"
+                                 value="{{ current_assignment.end_time_str if current_assignment else '' }}">
+
+                           <div class="mt-2 small text-muted current-assignment-display">
                               {% if current_assignment %}
-                                  {% if current_assignment.assigned_shift in ['Split Double', 'Double A', 'Double B'] and current_assignment.start_time_str and current_assignment.end_time_str %}
-                                      Currently: {{ current_assignment.assigned_shift }} ({{ current_assignment.start_time_str }} - {{ current_assignment.end_time_str }})
-                                  {% else %}
-                                      Currently: {{ current_assignment.assigned_shift }}
-                                  {% endif %}
+                                  {% set display_start = current_assignment.start_time_str if current_assignment.start_time_str else '' %}
+                                  {% set display_end = current_assignment.end_time_str if current_assignment.end_time_str else '' %}
+                                  Currently: {{ current_assignment.assigned_shift }}
+                                  {% if display_start and display_end %}({{ display_start }} - {{ display_end }}){% endif %}
                               {% else %}
                                   Currently: Not Scheduled
                               {% endif %}
@@ -275,43 +328,63 @@
                     {% endif %}
                   </div>
 
-                  <div class="assign-controls mb-2">
-                    <select name="assignment_{{ day_iso }}_{{ user.id }}"
-                            class="form-select form-select-sm shift-assignment-select"
-                            data-user-id="{{ user.id }}"
-                            data-day-iso="{{ day_iso }}"
-                            data-current-start-time="{{ current_assignment.start_time_str if current_assignment else '' }}"
-                            data-current-end-time="{{ current_assignment.end_time_str if current_assignment else '' }}">
-                        <option value="">Not Scheduled</option>
-                        {% set day_name = day.strftime('%A') %}
-                        {% set available_shifts_for_day_role = get_role_specific_shift_types(role_name, day_name) %}
+                  <div class="btn-group-vertical assign-controls mb-2" role="group" aria-label="Shift Assignment">
+                      {% set day_name = day.strftime('%A') %}
+                      {% set available_shifts_for_day_role = get_role_specific_shift_types(role_name, day_name) %}
 
-                        {% for st in scheduler_shift_types_generic %}
-                            {% if st in available_shifts_for_day_role %}
-                                {% set shift_time_display = get_shift_time_display(role_name, day_name, st) %}
-                                <option value="{{ st }}" {% if current_assignment and current_assignment.assigned_shift == st %}selected{% endif %}>
-                                    {{ st }} {{ shift_time_display }}
-                                </option>
-                            {% endif %}
-                        {% endfor %}
-                    </select>
-                    <input type="hidden"
-                           name="assignment_{{ day_iso }}_{{ user.id }}_start_time"
-                           class="custom-start-time"
-                           value="{{ current_assignment.start_time_str if current_assignment else '' }}">
-                    <input type="hidden"
-                           name="assignment_{{ day_iso }}_{{ user.id }}_end_time"
-                           class="custom-end-time"
-                           value="{{ current_assignment.end_time_str if current_assignment else '' }}">
+                      {% for st in ['Day', 'Night', 'Double', 'Split Double', 'Open'] %}
+                          {% if st in available_shifts_for_day_role %}
+                              {% set shift_time_display = get_shift_time_display(role_name, day_name, st) %}
+                              <button type="button"
+                                      class="btn btn-sm shift-assign-btn
+                                          {% if current_assignment and current_assignment.assigned_shift == st %}
+                                              {% if st == 'Day' %}active-day
+                                              {% elif st == 'Night' %}active-night
+                                              {% elif st == 'Double' or st == 'Double A' or st == 'Double B' %}active-double
+                                              {% elif st == 'Split Double' %}active-split-double
+                                              {% elif st == 'Open' %}active-open
+                                              {% endif %}
+                                          {% endif %}"
+                                      data-shift-type="{{ st }}"
+                                      data-user-id="{{ user.id }}"
+                                      data-day-iso="{{ day_iso }}"
+                                      data-user-full-name="{{ user.full_name }}"
+                                      data-day-name="{{ day_name }}"
+                                      data-predefined-start="{{ shift_time_display.split(' - ')[0].replace('(','') if shift_time_display else '' }}"
+                                      data-predefined-end="{{ shift_time_display.split(' - ')[1].replace(')','') if shift_time_display and ' - ' in shift_time_display else '' }}"
+                                      >
+                                  {{ st }}
+                              </button>
+                          {% endif %}
+                      {% endfor %}
+                      <button type="button"
+                              class="btn btn-sm btn-outline-secondary clear-shift-btn"
+                              data-user-id="{{ user.id }}"
+                              data-day-iso="{{ day_iso }}">
+                          Clear
+                      </button>
                   </div>
 
-                  <div class="small text-muted">
+                  {# Hidden inputs for the actual form submission #}
+                  <input type="hidden"
+                         name="assignment_{{ day_iso }}_{{ user.id }}"
+                         class="assigned-shift-type"
+                         value="{{ current_assignment.assigned_shift if current_assignment else '' }}">
+                  <input type="hidden"
+                         name="assignment_{{ day_iso }}_{{ user.id }}_start_time"
+                         class="custom-start-time"
+                         value="{{ current_assignment.start_time_str if current_assignment else '' }}">
+                  <input type="hidden"
+                         name="assignment_{{ day_iso }}_{{ user.id }}_end_time"
+                         class="custom-end-time"
+                         value="{{ current_assignment.end_time_str if current_assignment else '' }}">
+
+                  <div class="small text-muted current-assignment-display">
                     {% if current_assignment %}
-                      {% if current_assignment.assigned_shift in ['Split Double', 'Double A', 'Double B'] and current_assignment.start_time_str and current_assignment.end_time_str %}
-                        Currently: {{ current_assignment.assigned_shift }} ({{ current_assignment.start_time_str }} - {{ current_assignment.end_time_str }})
-                      {% else %}
-                        Currently: {{ current_assignment.assigned_shift }}
-                      {% endif %}
+                      {% set display_start = current_assignment.start_time_str if current_assignment.start_time_str else '' %}
+                      {% set display_end = current_assignment.end_time_str if current_assignment.end_time_str else '' %}
+                      Currently: {{ current_assignment.assigned_shift }}
+                      {% if display_start and display_end %}({{ display_start }} - {{ display_end }}){% endif %}
                     {% else %}
                       Currently: Not Scheduled
                     {% endif %}
@@ -408,76 +481,90 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     });
 
-    function getUserNameFromElement(selectElement) {
-        // For desktop table view
-        const tableRow = selectElement.closest('tr');
-        if (tableRow) {
-            return tableRow.querySelector('td:first-child').textContent.trim();
-        }
-        
-        // For mobile card view
-        const cardHeader = selectElement.closest('.staff-card').querySelector('.staff-card-header h5');
-        if (cardHeader) {
-            return cardHeader.textContent.trim();
-        }
-        
-        return 'User';
-    }
-
-    document.querySelectorAll('.shift-assignment-select').forEach(selectElement => {
-        selectElement.addEventListener('change', function() {
+    // Handle clicks on the new shift assignment buttons
+    document.querySelectorAll('.shift-assign-btn').forEach(button => {
+        button.addEventListener('click', function() {
             const userId = this.dataset.userId;
             const dayIso = this.dataset.dayIso;
-            const selectedShift = this.value;
-            const userName = getUserNameFromElement(this);
-            const dayName = new Date(dayIso + 'T00:00:00').toLocaleDateString(undefined, { weekday: 'long' });
+            const selectedShiftType = this.dataset.shiftType;
+            const userName = this.dataset.userFullName;
+            const dayName = this.dataset.dayName;
 
-            const customShiftTypes = ['Open','Split Double', 'Double A', 'Double B'];
+            const predefinedStart = this.dataset.predefinedStart;
+            const predefinedEnd = this.dataset.predefinedEnd;
 
-            if (customShiftTypes.includes(selectedShift)) {
+            // Update hidden inputs for form submission
+            const assignedShiftTypeInput = document.querySelector(`input[name="assignment_${dayIso}_${userId}"]`);
+            const startTimeHiddenInput = document.querySelector(`input[name="assignment_${dayIso}_${userId}_start_time"]`);
+            const endTimeHiddenInput = document.querySelector(`input[name="assignment_${dayIso}_${userId}_end_time"]`);
+            const currentAssignmentDisplay = this.closest('td, .day-assignment').querySelector('.current-assignment-display');
+
+
+            // Determine if custom time input is needed
+            const requiresCustomTime = (
+                selectedShiftType === 'Open' ||
+                selectedShiftType === 'Split Double' ||
+                predefinedStart === 'Specified by Scheduler' ||
+                predefinedEnd === 'Specified by Scheduler'
+            );
+            
+            if (requiresCustomTime) {
                 modalUserIdInput.value = userId;
                 modalDayIsoInput.value = dayIso;
-                modalSelectedShiftTypeInput.value = selectedShift;
+                modalSelectedShiftTypeInput.value = selectedShiftType;
 
-                modalShiftTypeDisplay.textContent = selectedShift;
+                modalShiftTypeDisplay.textContent = selectedShiftType;
                 modalUserNameDisplay.textContent = userName;
                 modalDayDisplay.textContent = dayName;
 
-                // Pre-fill modal with existing values from hidden inputs or predefined values
-                const startTimeHiddenInput = document.querySelector(`input[name="assignment_${dayIso}_${userId}_start_time"]`);
-                const endTimeHiddenInput = document.querySelector(`input[name="assignment_${dayIso}_${userId}_end_time"]`);
-
+                // Pre-fill modal with existing values from hidden inputs
                 let storedStartTime = startTimeHiddenInput ? startTimeHiddenInput.value : '';
                 let storedEndTime = endTimeHiddenInput ? endTimeHiddenInput.value : '';
 
-                // Get predefined times for the selected shift type
-                const predefinedTimes = getPredefinedShiftTimes(CURRENT_SCHEDULER_ROLE_NAME_JS, dayName, selectedShift);
+                customShiftStartTimeInput.value = storedStartTime || (predefinedStart !== 'Specified by Scheduler' ? predefinedStart : '');
 
-                // Set start time: use stored value, then predefined, then empty
-                customShiftStartTimeInput.value = storedStartTime || (predefinedTimes ? predefinedTimes.start : '');
-
-                // Set end time and checkbox state
                 if (storedEndTime.toLowerCase() === 'close') {
                     customShiftEndTimeCloseCheckbox.checked = true;
-                    customShiftEndTimeInput.value = ''; // Clear time input if 'Close' is checked
+                    customShiftEndTimeInput.value = '';
                     customShiftEndTimeInput.disabled = true;
                     customShiftEndTimeInput.removeAttribute('required');
                 } else {
                     customShiftEndTimeCloseCheckbox.checked = false;
-                    customShiftEndTimeInput.value = storedEndTime || (predefinedTimes ? predefinedTimes.end : '');
+                    customShiftEndTimeInput.value = storedEndTime || (predefinedEnd !== 'Specified by Scheduler' ? predefinedEnd : '');
                     customShiftEndTimeInput.disabled = false;
                     customShiftEndTimeInput.setAttribute('required', 'required');
                 }
                 
                 customShiftTimeInputModal.show();
             } else {
-                // Clear custom time hidden inputs if a non-custom shift is selected
-                const startTimeHiddenInput = document.querySelector(`input[name="assignment_${dayIso}_${userId}_start_time"]`);
-                const endTimeHiddenInput = document.querySelector(`input[name="assignment_${dayIso}_${userId}_end_time"]`);
-                
-                if (startTimeHiddenInput) startTimeHiddenInput.value = '';
-                if (endTimeHiddenInput) endTimeHiddenInput.value = '';
+                // For shifts with predefined times, directly update hidden inputs and display
+                assignedShiftTypeInput.value = selectedShiftType;
+                startTimeHiddenInput.value = predefinedStart;
+                endTimeHiddenInput.value = predefinedEnd;
+
+                // Update UI to show active button and current assignment
+                updateShiftDisplay(this, selectedShiftType, predefinedStart, predefinedEnd, currentAssignmentDisplay);
             }
+        });
+    });
+
+    // Handle clear shift button clicks
+    document.querySelectorAll('.clear-shift-btn').forEach(button => {
+        button.addEventListener('click', function() {
+            const userId = this.dataset.userId;
+            const dayIso = this.dataset.dayIso;
+
+            const assignedShiftTypeInput = document.querySelector(`input[name="assignment_${dayIso}_${userId}"]`);
+            const startTimeHiddenInput = document.querySelector(`input[name="assignment_${dayIso}_${userId}_start_time"]`);
+            const endTimeHiddenInput = document.querySelector(`input[name="assignment_${dayIso}_${userId}_end_time"]`);
+            const currentAssignmentDisplay = this.closest('td, .day-assignment').querySelector('.current-assignment-display');
+
+            assignedShiftTypeInput.value = ''; // Clear assigned shift
+            startTimeHiddenInput.value = '';   // Clear custom times
+            endTimeHiddenInput.value = '';
+
+            // Update UI to show "Not Scheduled" and remove active button classes
+            updateShiftDisplay(this, '', '', '', currentAssignmentDisplay);
         });
     });
 
@@ -503,14 +590,76 @@ document.addEventListener('DOMContentLoaded', function() {
             endTime = "Close";
         }
 
+        const assignedShiftTypeInput = document.querySelector(`input[name="assignment_${dayIso}_${userId}"]`);
         const startTimeHiddenInput = document.querySelector(`input[name="assignment_${dayIso}_${userId}_start_time"]`);
         const endTimeHiddenInput = document.querySelector(`input[name="assignment_${dayIso}_${userId}_end_time"]`);
+        const targetCellOrCard = assignedShiftTypeInput.closest('td, .day-assignment');
+        const currentAssignmentDisplay = targetCellOrCard.querySelector('.current-assignment-display');
 
+
+        if (assignedShiftTypeInput) assignedShiftTypeInput.value = selectedShiftType;
         if (startTimeHiddenInput) startTimeHiddenInput.value = startTime;
         if (endTimeHiddenInput) endTimeHiddenInput.value = endTime;
         
-customShiftTimeInputModal.hide();
+        // Update UI after saving custom times
+        const relevantButton = targetCellOrCard.querySelector(`.shift-assign-btn[data-shift-type="${selectedShiftType}"]`);
+        updateShiftDisplay(relevantButton, selectedShiftType, startTime, endTime, currentAssignmentDisplay);
+
+        customShiftTimeInputModal.hide();
     });
+
+    // Function to update the visual display of the assigned shift
+    function updateShiftDisplay(triggerElement, shiftType, startTime, endTime, displayElement) {
+        const parentContainer = triggerElement.closest('.assign-controls');
+        if (!parentContainer) return;
+
+        // Remove all active classes from buttons in this group
+        parentContainer.querySelectorAll('.shift-assign-btn').forEach(btn => {
+            btn.classList.remove('active-day', 'active-night', 'active-double', 'active-split-double', 'active-open');
+        });
+
+        // Add active class to the selected button
+        if (shiftType) {
+            const activeButton = parentContainer.querySelector(`.shift-assign-btn[data-shift-type="${shiftType}"]`);
+            if (activeButton) {
+                if (shiftType === 'Day') activeButton.classList.add('active-day');
+                else if (shiftType === 'Night') activeButton.classList.add('active-night');
+                else if (shiftType.includes('Double')) activeButton.classList.add('active-double'); // Catches Double, Double A, Double B
+                else if (shiftType === 'Split Double') activeButton.classList.add('active-split-double');
+                else if (shiftType === 'Open') activeButton.classList.add('active-open');
+            }
+        }
+
+        // Update the "Currently:" display
+        if (displayElement) {
+            if (shiftType) {
+                const timePart = (startTime && endTime) ? ` (${startTime} - ${endTime})` : '';
+                displayElement.textContent = `Currently: ${shiftType}${timePart}`;
+            } else {
+                displayElement.textContent = 'Currently: Not Scheduled';
+            }
+        }
+    }
+
+    // Initialize display on page load based on current_assignment values
+    document.querySelectorAll('.assigned-shift-type').forEach(hiddenInput => {
+        const shiftType = hiddenInput.value;
+        if (shiftType) {
+            const userId = hiddenInput.name.split('_')[1]; // Extract userId from name
+            const dayIso = hiddenInput.name.split('_')[2]; // Extract dayIso from name
+            const startTime = document.querySelector(`input[name="assignment_${dayIso}_${userId}_start_time"]`).value;
+            const endTime = document.querySelector(`input[name="assignment_${dayIso}_${userId}_end_time"]`).value;
+            
+            const targetCellOrCard = hiddenInput.closest('td, .day-assignment');
+            const currentAssignmentDisplay = targetCellOrCard.querySelector('.current-assignment-display');
+            const relevantButton = targetCellOrCard.querySelector(`.shift-assign-btn[data-shift-type="${shiftType}"]`);
+
+            if (relevantButton) {
+                updateShiftDisplay(relevantButton, shiftType, startTime, endTime, currentAssignmentDisplay);
+            }
+        }
+    });
+
 
     // Clear modal inputs and reset state when modal is hidden
     document.getElementById('customShiftTimeInputModal').addEventListener('hidden.bs.modal', function () {
@@ -543,7 +692,6 @@ customShiftTimeInputModal.hide();
     }
     
     // Update header classes when collapse events happen
-    // This is already present in your original file, keeping it.
     staffCardBodies.forEach(body => {
         body.addEventListener('show.bs.collapse', function() {
             const header = this.previousElementSibling;

@@ -323,15 +323,22 @@ class Schedule(db.Model):
 
 class ShiftSwapRequest(db.Model):
     id = db.Column(db.Integer, primary_key=True)
-    schedule_id = db.Column(db.Integer, db.ForeignKey('schedule.id'), nullable=False)
+    # The shift the requester is offering to give up
+    requester_schedule_id = db.Column(db.Integer, db.ForeignKey('schedule.id'), nullable=False)
+    # The shift the requester wishes to take from the coverer (for two-way swaps)
+    coverer_assigned_schedule_id = db.Column(db.Integer, db.ForeignKey('schedule.id'), nullable=True) 
+    
     requester_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
-    coverer_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
+    coverer_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True) # The suggested/approved coverer
     status = db.Column(db.String(20), nullable=False, default='Pending')
     timestamp = db.Column(db.DateTime, default=datetime.utcnow)
-    schedule = db.relationship('Schedule', backref='swap_requests')
-    requester = db.relationship('User', foreign_keys=[requester_id])
-    coverer = db.relationship('User', foreign_keys=[coverer_id])
-
+    swap_part = db.Column(db.String(10), nullable=False, default='full') # 'full', 'day', 'night'
+    
+    # Relationships
+    requester_shift = db.relationship('Schedule', foreign_keys=[requester_schedule_id], backref='swap_requests_as_requester')
+    coverer_shift = db.relationship('Schedule', foreign_keys=[coverer_assigned_schedule_id], backref='swap_requests_as_coverer')
+    requester_user = db.relationship('User', foreign_keys=[requester_id])
+    coverer_user = db.relationship('User', foreign_keys=[coverer_id])
 class LeaveRequest(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
@@ -364,13 +371,13 @@ class VolunteeredShift(db.Model):
     volunteers = db.relationship('User', secondary=volunteered_shift_candidates, backref=db.backref('shifts_volunteered_for', lazy='dynamic'))
     relinquish_reason = db.Column(db.Text, nullable=True)
 
-class UserFCMToken(db.Model):
+class UserOneSignalPlayerId(db.Model): # <--- NEW MODEL
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
-    fcm_token = db.Column(db.String(255), unique=True, nullable=False) # The FCM token from the device/browser
-    device_info = db.Column(db.String(255), nullable=True) # e.g., "Chrome on Windows", "Safari on iOS PWA"
+    player_id = db.Column(db.String(255), unique=True, nullable=False) # OneSignal Player ID
+    device_info = db.Column(db.String(255), nullable=True)
     timestamp = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
 
-    user = db.relationship('User', backref=db.backref('fcm_tokens', lazy=True, cascade="all, delete-orphan"))
+    user = db.relationship('User', backref=db.backref('onesignal_player_ids', lazy=True, cascade="all, delete-orphan"))
 
     __table_args__ = {'extend_existing': True}

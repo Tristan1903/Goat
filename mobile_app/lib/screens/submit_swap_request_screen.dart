@@ -10,8 +10,9 @@ import '../widgets/home_button.dart';
 
 class SubmitSwapRequestScreen extends StatefulWidget {
   final ScheduleItem shiftToSwap;
+  final String swapPart; // 'full', 'day', or 'night'
 
-  const SubmitSwapRequestScreen({super.key, required this.shiftToSwap});
+  const SubmitSwapRequestScreen({super.key, required this.shiftToSwap, this.swapPart = 'full'}); // <--- MODIFIED CONSTRUCTOR
 
   @override
   State<SubmitSwapRequestScreen> createState() => _SubmitSwapRequestScreenState();

@@ -19,7 +19,8 @@ class PendingSwap {
   final DateTime shiftDate;
   final String status; // Should be 'Pending' for this list
   final DateTime timestamp;
-  final List<StaffMember> eligibleCovers; // Staff eligible to cover this specific swap
+  final String swapPart;
+  final List<StaffMember> eligibleCovers; // Staff eligible to cover this specific swap+
 
   PendingSwap({
     required this.id,
@@ -32,6 +33,7 @@ class PendingSwap {
     required this.shiftDate,
     required this.status,
     required this.timestamp,
+    required this.swapPart,
     required this.eligibleCovers,
   });
 
@@ -47,6 +49,7 @@ class PendingSwap {
       shiftDate: DateTime.parse(json['shift_date'] as String),
       status: json['status'] as String,
       timestamp: DateTime.parse(json['timestamp'] as String),
+      swapPart: json['swap_part'] as String,
       eligibleCovers: (json['eligible_covers'] as List<dynamic>?)
               ?.map((e) => StaffMember.fromJson(e as Map<String, dynamic>))
               .toList() ??
@@ -67,6 +70,7 @@ class SwapHistoryItem {
   final String? covererFullName;
   final String status;
   final DateTime timestamp;
+  final String swapPart;
 
   SwapHistoryItem({
     required this.id,
@@ -77,6 +81,7 @@ class SwapHistoryItem {
     this.covererFullName,
     required this.status,
     required this.timestamp,
+    required this.swapPart,
   });
 
   factory SwapHistoryItem.fromJson(Map<String, dynamic> json) {
@@ -89,6 +94,7 @@ class SwapHistoryItem {
       covererFullName: json['coverer_full_name'] as String?,
       status: json['status'] as String,
       timestamp: DateTime.parse(json['timestamp'] as String),
+      swapPart: json['swap_part'] as String,
     );
   }
 
@@ -293,7 +299,7 @@ class CategorizedDailyShifts {
     return CategorizedDailyShifts(
       todayDate: DateTime.parse(json['today_date'] as String),
       shiftsByRoleCategorized: parsedShifts,
-      sortedRoleCategories: (json['sorted_role_categories'] as List<dynamic>).map((e) => e as String).toList(),
+      sortedRoleCategories: (json['sorted_role_categories'] as List<dynamic>?)?.map((e) => e as String).toList() ?? [],
     );
   }  
 }

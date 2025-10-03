@@ -47,6 +47,7 @@ class Config:
         'henno@thefndry.co.za'
     ]
 
-    FIREBASE_SERVICE_ACCOUNT_KEY = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'firebase_service_account.json')
-
     FLASK_WEB_BASE_URL = os.environ.get('FLASK_WEB_BASE_URL') or 'https://abbadon1903.pythonanywhere.com'
+
+    ONESIGNAL_APP_ID = os.environ.get('ONESIGNAL_APP_ID') # From OneSignal Dashboard
+    ONESIGNAL_REST_API_KEY = os.environ.get('ONESIGNAL_REST_API_KEY') # From OneSignal Dashboard

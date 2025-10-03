@@ -193,6 +193,8 @@ class _ManageAnnouncementsScreenState extends State<ManageAnnouncementsScreen> {
               return Card(
                 margin: const EdgeInsets.symmetric(vertical: 4.0),
                 elevation: 2,
+                color: const Color.fromARGB(255, 82, 82, 82), // White background for the card
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8.0)),
                 child: Padding(
                   padding: const EdgeInsets.all(12.0),
                   child: Column(
@@ -211,8 +213,8 @@ class _ManageAnnouncementsScreenState extends State<ManageAnnouncementsScreen> {
                           const SizedBox(width: 8),
                           Chip(
                             label: Text(announcement.category),
-                            backgroundColor: announcement.categoryColor.withOpacity(0.2),
-                            labelStyle: TextStyle(color: announcement.categoryColor),
+                            backgroundColor: Colors.grey.shade300, // Light grey for "General" category chip
+                            labelStyle: TextStyle(color: Colors.grey.shade800),
                             visualDensity: VisualDensity.compact,
                           ),
                         ],

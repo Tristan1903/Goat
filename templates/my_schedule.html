@@ -9,6 +9,32 @@
 {% endblock %}
 
 {% block content %}
+<style>
+    /* New CSS for shift color coding on My Schedule page */
+    .shift-day {
+        background-color: #add8e6; /* Light blue */
+        border-left: 5px solid #add8e6; /* Highlight border */
+        padding-left: 5px; /* Adjust padding for border */
+    }
+    .shift-night {
+        background-color: #4682b4; /* Steel blue */
+        color: white; /* White text for dark background */
+        border-left: 5px solid #4682b4;
+        padding-left: 5px;
+    }
+    .shift-double, .shift-double-a, .shift-double-b { /* Grouping all double types */
+        background-color: #00008b; /* Dark blue */
+        color: white;
+        border-left: 5px solid #00008b;
+        padding-left: 5px;
+    }
+    /* Styles for the shift display containers, ensuring some spacing */
+    .shift-display-container {
+        padding: 5px;
+        margin-bottom: 3px;
+        border-radius: 4px;
+    }
+</style>
 <div class="container mt-4">
     <div class="card shadow-sm">
         <div class="card-body p-4 p-md-5">
@@ -96,7 +122,7 @@
                     {% endif %}
                 {% endfor %}
 
-                {# Macro to render a shift with its time details #}
+                {# Macro to render a shift with its time details and color coding #}
                 {% macro render_shift_with_time(shift_obj, user_obj_or_role_name) %}
                     {% set day_name = shift_obj.shift_date.strftime('%A') %}
                     {% set role_name_for_lookup = '' %}
@@ -118,15 +144,23 @@
                     
                     {% set shift_time_display = get_shift_time_display(role_name_for_lookup, day_name, shift_obj.assigned_shift, shift_obj.start_time_str, shift_obj.end_time_str) %}
 
-                    {{ shift_obj.assigned_shift }} <small class="text-muted">{{ shift_time_display }}</small>
-                    {# Check if a swap request or volunteer request is pending for this shift #}
-                    {% set pending_swap = shift_obj.swap_requests|selectattr('status','equalto','Pending')|first %}
-                    {% set pending_volunteer = shift_obj.volunteered_cycle if shift_obj.volunteered_cycle and (shift_obj.volunteered_cycle.status == 'Open' or shift_obj.volunteered_cycle.status == 'PendingApproval') else None %} 
-                    {% if pending_swap %}
-                        <span class="badge bg-warning text-dark ms-2">Swap Pending (Suggested: {{ pending_swap.coverer.full_name if pending_swap.coverer else 'None' }})</span>
-                    {% elif pending_volunteer %}
-                        <span class="badge bg-info text-dark ms-2">Relinquished - Open for Volunteers</span>
+                    {% set shift_class = '' %}
+                    {% if shift_obj.assigned_shift == 'Day' %}{% set shift_class = 'shift-day' %}
+                    {% elif shift_obj.assigned_shift == 'Night' %}{% set shift_class = 'shift-night' %}
+                    {% elif shift_obj.assigned_shift == 'Double' or shift_obj.assigned_shift == 'Double A' or shift_obj.assigned_shift == 'Double B' %}{% set shift_class = 'shift-double' %}
                     {% endif %}
+
+                    <div class="shift-display-container {{ shift_class }}">
+                        {{ shift_obj.assigned_shift }} <small class="text-muted">{{ shift_time_display }}</small>
+                        {# Check if a swap request or volunteer request is pending for this shift #}
+                        {% set pending_swap = shift_obj.swap_requests|selectattr('status','equalto','Pending')|first %}
+                        {% set pending_volunteer = shift_obj.volunteered_cycle if shift_obj.volunteered_cycle and (shift_obj.volunteered_cycle.status == 'Open' or shift_obj.volunteered_cycle.status == 'PendingApproval') else None %} 
+                        {% if pending_swap %}
+                            <span class="badge bg-warning text-dark ms-2">Swap Pending (Suggested: {{ pending_swap.coverer_user.full_name if pending_swap.coverer_user else 'None' }})</span>
+                        {% elif pending_volunteer %}
+                            <span class="badge bg-info text-dark ms-2">Relinquished - Open for Volunteers</span>
+                        {% endif %}
+                    </div>
                 {% endmacro %}
 
 
@@ -301,8 +335,8 @@
                             <tr>
                                 <td><strong>Shifts</strong></td>
                                 {% for day in ns.dates %}
-                                    <td class="position-relative"> {# Added position-relative to TD #}
-                                        <div class="shift-glow-container 
+                                    <td class="position-relative">
+                                        <div class="shift-glow-container
                                                     {% if schedule_by_day.get(day, []) %}has-assigned-shift-glow{% else %}no-assigned-shift-glow{% endif %}">
                                             {% set shifts = schedule_by_day.get(day, []) if schedule_by_day is defined else [] %}
                                             {% if shifts %}
@@ -315,6 +349,7 @@
                                         </div>
                                     </td>
                                 {% endfor %}
+                            </tr>
                             </tbody>
                         </table>
 
@@ -323,17 +358,31 @@
                     <div class="collapse mt-4" id="swapRequestForm">
                         <div class="card card-body bg-light">
                             <h5 class="card-title">Initiate Shift Swap</h5>
-                            <form action="{{ url_for('submit_new_swap_request') }}" method="POST">
+                            <form action="{{ url_for('submit_new_swap_request') }}" method="POST" id="swapForm">
                                 <div class="mb-3">
-                                    <label for="shiftToSwap" class="form-label">Shift to Swap</label>
-                                    <select class="form-select" id="shiftToSwap" name="requester_schedule_id" required>
+                                    <label for="requesterShift" class="form-label">Your Shift to Swap</label>
+                                    <select class="form-select" id="requesterShift" name="requester_schedule_id" required>
                                         <option value="" disabled selected>Select your shift...</option>
                                     </select>
                                 </div>
+                                <div class="mb-3" id="swapPartSelection" style="display: none;">
+                                    <label for="swapPart" class="form-label">Swap which part of the Double shift?</label>
+                                    <select class="form-select" id="swapPart" name="swap_part" required>
+                                        <option value="full" selected>Full Double</option>
+                                        <option value="day">Day Part Only</option>
+                                        <option value="night">Night Part Only</option>
+                                    </select>
+                                </div>
                                 <div class="mb-3">
-                                    <label for="desiredCover" class="form-label">Suggested Cover</label>
+                                    <label for="desiredCover" class="form-label">Desired Coverer</label>
                                     <select class="form-select" id="desiredCover" name="desired_cover_id" required>
                                         <option value="" disabled selected>Select a potential cover...</option>
+                                    </select>
+                                </div>
+                                <div class="mb-3" id="covererShiftSelection" style="display: none;">
+                                    <label for="covererShift" class="form-label">Coverer's Shift to Swap Into</label>
+                                    <select class="form-select" id="covererShift" name="coverer_schedule_id" required>
+                                        <option value="" disabled selected>Select the coverer's shift...</option>
                                     </select>
                                 </div>
                                 <button type="submit" class="btn btn-primary">Submit Swap Request</button>
@@ -457,8 +506,12 @@ document.addEventListener('DOMContentLoaded', function () {
     const currentUserId = {{ current_user.id | tojson }};
 
     const mainRequestSwapBtn = document.getElementById('mainRequestSwapBtn');
-    const shiftToSwapSelect = document.getElementById('shiftToSwap');
+    const requesterShiftSelect = document.getElementById('requesterShift'); // Changed from shiftToSwapSelect
+    const swapPartSelection = document.getElementById('swapPartSelection');
+    const swapPartSelect = document.getElementById('swapPart');
     const desiredCoverSelect = document.getElementById('desiredCover');
+    const covererShiftSelection = document.getElementById('covererShiftSelection'); // New element
+    const covererShiftSelect = document.getElementById('covererShift'); // New element
     const swapRequestFormCollapseEl = document.getElementById('swapRequestForm');
     let swapRequestFormCollapse = null;
     if (swapRequestFormCollapseEl) {
@@ -474,7 +527,7 @@ document.addEventListener('DOMContentLoaded', function () {
     }
 
 
-    function populateShiftsToDropdown(dropdownSelect, includePendingSwaps = true, includePendingRelinquished = true) {
+    function populateRequesterShiftsToDropdown(dropdownSelect, includePendingSwaps = true, includePendingRelinquished = true) {
         if (!dropdownSelect) return;
         dropdownSelect.innerHTML = '<option value="" disabled selected>Select your shift...</option>';
 
@@ -502,7 +555,7 @@ document.addEventListener('DOMContentLoaded', function () {
                     
                     let shiftText = shift.assigned_shift;
                     // Check if it's a custom time shift and has times
-                    if (['Split Double', 'Double A', 'Double B'].includes(shift.assigned_shift) && shift.start_time_str && shift.end_time_str) {
+                    if (shift.start_time_str && shift.end_time_str) {
                         shiftText += ` (${shift.start_time_str} - ${shift.end_time_str})`;
                     }
                     option.textContent = `${shiftText} on ${dateLabel}`;
@@ -516,8 +569,11 @@ document.addEventListener('DOMContentLoaded', function () {
 
     if (mainRequestSwapBtn) {
         mainRequestSwapBtn.addEventListener('click', function() {
-            populateShiftsToDropdown(shiftToSwapSelect, false, true);
-            filterDesiredCoverDropdown(); 
+            populateRequesterShiftsToDropdown(requesterShiftSelect, false, true);
+            desiredCoverSelect.innerHTML = '<option value="" disabled selected>Select a potential cover...</option>'; // Reset
+            covererShiftSelect.innerHTML = '<option value="" disabled selected>Select the coverer\'s shift...</option>'; // Reset
+            covererShiftSelection.style.display = 'none'; // Hide coverer shift selection initially
+            swapPartSelection.style.display = 'none'; // Hide swap part selection initially
             if (swapRequestFormCollapse) { swapRequestFormCollapse.show(); }
             if (relinquishShiftFormCollapse) { relinquishShiftFormCollapse.hide(); }
         });
@@ -532,12 +588,26 @@ document.addEventListener('DOMContentLoaded', function () {
         return null;
     }
 
-    function filterDesiredCoverDropdown() {
-        if (!shiftToSwapSelect || !desiredCoverSelect) return;
+    function getStaffShiftDetails(userId, shiftId) {
+        const userSchedule = staffSchedulesForWeek[userId];
+        if (!userSchedule) return null;
 
-        const selectedShiftId = shiftToSwapSelect.value;
+        for (const dayStr in userSchedule) {
+            const shiftsOnDay = userSchedule[dayStr];
+            const shift = shiftsOnDay.find(s => s.id == shiftId);
+            if (shift) return shift;
+        }
+        return null;
+    }
+
+    function populateDesiredCoverDropdown() {
+        if (!requesterShiftSelect || !desiredCoverSelect) return;
+
+        const selectedShiftId = requesterShiftSelect.value;
         if (!selectedShiftId) {
             desiredCoverSelect.innerHTML = '<option value="" disabled selected>Select a potential cover...</option>';
+            covererShiftSelection.style.display = 'none';
+            swapPartSelection.style.display = 'none';
             return;
         }
 
@@ -545,49 +615,107 @@ document.addEventListener('DOMContentLoaded', function () {
         if (!selectedShiftDetails) {
             console.error("Could not find details for selected shift ID:", selectedShiftId);
             desiredCoverSelect.innerHTML = '<option value="" disabled selected>Error loading cover options.</option>';
+            covererShiftSelection.style.display = 'none';
+            swapPartSelection.style.display = 'none';
             return;
         }
 
+        // Show/hide swap part selection if the requester's shift is a 'Double'
+        if (selectedShiftDetails.assigned_shift === 'Double') {
+            swapPartSelection.style.display = 'block';
+            swapPartSelect.value = 'full'; // Default to full
+        } else {
+            swapPartSelection.style.display = 'none';
+        }
+
         desiredCoverSelect.innerHTML = '<option value="" disabled selected>Select a potential cover...</option>';
+        covererShiftSelect.innerHTML = '<option value="" disabled selected>Select the coverer\'s shift...</option>';
+        covererShiftSelection.style.display = 'none';
+
 
         allEligibleStaff.forEach(staff => {
-            if (staff.id === currentUserId) { return; }
+            if (staff.id === currentUserId) { return; } // Cannot swap with self
             
             const hasMatchingRole = staff.roles.some(role => currentUserRoles.includes(role));
-            if (!hasMatchingRole) { return; }
+            if (!hasMatchingRole) { return; } // Coverer must have a matching role
 
-            const covererScheduleForRequestedDay = staffSchedulesForWeek[staff.id] ? staffSchedulesForWeek[staff.id][selectedShiftDetails.shift_date] : [];
-            let conflict = false;
+            // No conflict check for the desired coverer at this stage, as they will pick their shift later.
+            // We just need eligible staff who share a role.
 
-            // All 'Double' variants and 'Split Double' occupy the entire day for conflict checking
-            const fullDayShifts = ['Double', 'Double A', 'Double B', 'Split Double'];
-
-            if (fullDayShifts.includes(selectedShiftDetails.assigned_shift)) {
-                if (covererScheduleForRequestedDay && covererScheduleForRequestedDay.length > 0) { conflict = true; }
-            } else {
-                const requestedTimeSlot = selectedShiftDetails.assigned_shift; 
-                conflict = covererScheduleForRequestedDay.some(covererShift => {
-                    const covererAssignedShift = covererShift.assigned_shift;
-                    return fullDayShifts.includes(covererAssignedShift) || covererAssignedShift === requestedTimeSlot || covererAssignedShift === 'Open'; 
-                });
-            }
-
-            if (!conflict) {
-                const option = document.createElement('option');
-                option.value = staff.id;
-                option.textContent = staff.full_name;
-                desiredCoverSelect.appendChild(option);
-            }
+            const option = document.createElement('option');
+            option.value = staff.id;
+            option.textContent = staff.full_name;
+            option.dataset.staffRoles = JSON.stringify(staff.roles); // Store roles for later use
+            desiredCoverSelect.appendChild(option);
         });
     }
 
-    if (shiftToSwapSelect) {
-        shiftToSwapSelect.addEventListener('change', filterDesiredCoverDropdown);
+    function populateCovererShiftsDropdown() {
+        if (!desiredCoverSelect || !requesterShiftSelect || !covererShiftSelect) return;
+
+        const selectedCovererId = desiredCoverSelect.value;
+        const selectedRequesterShiftId = requesterShiftSelect.value;
+
+        if (!selectedCovererId || !selectedRequesterShiftId) {
+            covererShiftSelection.style.display = 'none';
+            return;
+        }
+
+        const requesterShiftDetails = getPersonalShiftDetails(selectedRequesterShiftId);
+        if (!requesterShiftDetails) {
+            console.error("Could not find details for requester's selected shift ID:", selectedRequesterShiftId);
+            covererShiftSelection.style.display = 'none';
+            return;
+        }
+
+        const requesterShiftDate = requesterShiftDetails.shift_date; // ISO format date string
+
+        covererShiftSelect.innerHTML = '<option value="" disabled selected>Select the coverer\'s shift...</option>';
+
+        const covererScheduleForRequesterShiftDay = staffSchedulesForWeek[selectedCovererId] ? staffSchedulesForWeek[selectedCovererId][requesterShiftDate] : [];
+
+        // Filter coverer's shifts on the same day as the requester's shift
+        covererScheduleForRequesterShiftDay.forEach(shift => {
+            // Check if the coverer's shift is not pending a swap or relinquished
+            const isPendingSwap = shift.swap_requests && shift.swap_requests.some(req => req && req.status === 'Pending');
+            const isPendingRelinquished = shift.volunteered_cycle && (shift.volunteered_cycle.status === 'Open' || shift.volunteered_cycle.status == 'PendingApproval');
+
+            // Do not include the requester's own shifts if by some error they appear here
+            if (shift.user_id === currentUserId) { return; }
+
+            if (!isPendingSwap && !isPendingRelinquished) {
+                const option = document.createElement('option');
+                option.value = shift.id;
+                let shiftText = shift.assigned_shift;
+                if (shift.start_time_str && shift.end_time_str) {
+                    shiftText += ` (${shift.start_time_str} - ${shift.end_time_str})`;
+                }
+                option.textContent = `${shiftText}`; // Just show shift type, day is implicit
+                option.dataset.shiftType = shift.assigned_shift;
+                covererShiftSelect.appendChild(option);
+            }
+        });
+
+        // Show the coverer's shift selection if there are options
+        if (covererShiftSelect.options.length > 1) { // More than just the "Select..." option
+            covererShiftSelection.style.display = 'block';
+        } else {
+            covererShiftSelection.style.display = 'none';
+        }
+    }
+
+
+    if (requesterShiftSelect) {
+        requesterShiftSelect.addEventListener('change', populateDesiredCoverDropdown);
+    }
+
+    if (desiredCoverSelect) {
+        desiredCoverSelect.addEventListener('change', populateCovererShiftsDropdown);
     }
 
     if (mainRelinquishShiftBtn) {
         mainRelinquishShiftBtn.addEventListener('click', function() {
-            populateShiftsToDropdown(shiftToRelinquishSelect, true, false);
+            populateRequesterShiftsToDropdown(shiftToRelinquishSelect, true, false);
             if (relinquishShiftFormCollapse) { relinquishShiftFormCollapse.show(); }
             if (swapRequestFormCollapse) { swapRequestFormCollapse.hide(); }
         });

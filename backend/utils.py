@@ -1,6 +1,7 @@
 import os
 import io
 import mimetypes
+import requests
 
 from datetime import datetime, timedelta
 
@@ -14,9 +15,8 @@ from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from googleapiclient.http import MediaIoBaseUpload
 
-import firebase_admin
-from firebase_admin import credentials, messaging
-from .models import User, UserFCMToken, Role, LeaveRequest, User, db, ActivityLog
+from .models import User, Role, LeaveRequest, User, db, ActivityLog
+
 
 def _build_week_dates(week_offset=0):
     """
@@ -50,58 +50,40 @@ def _build_week_dates(week_offset=0):
 
     return start_of_offset_week, week_dates, end_of_week, leave_dict
 
-SCHEDULER_SHIFT_TYPES_GENERIC = ['Open', 'Day', 'Night', 'Double A', 'Double B', 'Split Double']
+SCHEDULER_SHIFT_TYPES_GENERIC = ['Day', 'Night', 'Double'] 
 
 # Detailed shift definitions by role and day of the week
 ROLE_SHIFT_DEFINITIONS = {
     'bartender': {
         'Tuesday': {
-            'Open': {'start': '08:00', 'end': '16:00'},
             'Day': {'start': '10:00', 'end': '16:00'},
             'Night': {'start': '16:00', 'end': 'Close'},
-            'Double A': {'start': '08:00', 'end': 'Specified by Scheduler'},
-            'Double B': {'start': '10:00', 'end': 'Specified by Scheduler'},
-            'Split Double': {'start': 'Specified by Scheduler', 'end': 'Specified by Scheduler'},
+            'Double': {'start': '08:00', 'end': 'Close'}, # Managers will set actual times
         },
         'Wednesday': { # Same as Tuesday
-            'Open': {'start': '08:00', 'end': '16:00'},
             'Day': {'start': '10:00', 'end': '16:00'},
             'Night': {'start': '16:00', 'end': 'Close'},
-            'Double A': {'start': '08:00', 'end': 'Specified by Scheduler'},
-            'Double B': {'start': '10:00', 'end': 'Specified by Scheduler'},
-            'Split Double': {'start': 'Specified by Scheduler', 'end': 'Specified by Scheduler'},
+            'Double': {'start': '08:00', 'end': 'Close'},
         },
         'Thursday': { # Same as Tuesday
-            'Open': {'start': '08:00', 'end': '16:00'},
             'Day': {'start': '10:00', 'end': '16:00'},
             'Night': {'start': '16:00', 'end': 'Close'},
-            'Double A': {'start': '08:00', 'end': 'Specified by Scheduler'},
-            'Double B': {'start': '10:00', 'end': 'Specified by Scheduler'},
-            'Split Double': {'start': 'Specified by Scheduler', 'end': 'Specified by Scheduler'},
+            'Double': {'start': '08:00', 'end': 'Close'},
         },
         'Friday': {
-            'Open': {'start': '08:00', 'end': '17:00'},
             'Day': {'start': '10:00', 'end': '17:00'},
             'Night': {'start': '15:00', 'end': 'Close'},
-            'Double A': {'start': '08:00', 'end': 'Specified by Scheduler'},
-            'Double B': {'start': '10:00', 'end': 'Specified by Scheduler'},
-            'Split Double': {'start': 'Specified by Scheduler', 'end': 'Specified by Scheduler'},
+            'Double': {'start': '08:00', 'end': 'Close'},
         },
         'Saturday': { # Same as Friday
-            'Open': {'start': '08:00', 'end': '17:00'},
             'Day': {'start': '10:00', 'end': '17:00'},
             'Night': {'start': '15:00', 'end': 'Close'},
-            'Double A': {'start': '08:00', 'end': 'Specified by Scheduler'},
-            'Double B': {'start': '10:00', 'end': 'Specified by Scheduler'},
-            'Split Double': {'start': 'Specified by Scheduler', 'end': 'Specified by Scheduler'},
+            'Double': {'start': '08:00', 'end': 'Close'},
         },
         'Sunday': {
-            'Open': {'start': '08:00', 'end': '15:00'},
-            'Day': {'start': '10:00', 'end': '17:00'},
-            'Night': {'start': '15:00', 'end': 'Close'},
-            'Double A': {'start': '08:00', 'end': 'Specified by Scheduler'},
-            'Double B': {'start': '10:00', 'end': 'Specified by Scheduler'},
-            'Split Double': {'start': 'Specified by Scheduler', 'end': 'Specified by Scheduler'},
+            'Day': {'start': '10:00', 'end': '17:00'}, # Changed from 10-15
+            'Night': {'start': '15:00', 'end': 'Close'}, # Changed from 15-Close
+            'Double': {'start': '08:00', 'end': 'Close'}, # Changed from 08-Close
         }
     },
     'waiter': {
@@ -139,16 +121,18 @@ ROLE_SHIFT_DEFINITIONS = {
     # Default definitions for other roles if not explicitly specified.
     'skullers': {
         'default': { # Apply these for all days not explicitly defined
-            'Open': {'start': 'Flexible', 'end': 'Flexible'},
             'Day': {'start': '09:00', 'end': '17:00'},
             'Night': {'start': '17:00', 'end': 'Close'},
             'Double': {'start': '09:00', 'end': 'Close'},
-            'Split Double': {'start': 'Specified by Scheduler', 'end': 'Specified by Scheduler'},
         }
     },
     'manager': { # Managers and General Managers share rules
         'default': {
-            'Split Double': {'start': 'Specified by Scheduler', 'end': 'Specified by Scheduler'},
+            # Managers don't have predefined Day/Night/Double usually, it's custom set
+            # so we'll leave these as requiring scheduler input, but they'll use the modal
+            'Day': {'start': 'Specified by Scheduler', 'end': 'Specified by Scheduler'},
+            'Night': {'start': 'Specified by Scheduler', 'end': 'Specified by Scheduler'},
+            'Double': {'start': 'Specified by Scheduler', 'end': 'Specified by Scheduler'},
         }
     }
 }
@@ -344,47 +328,6 @@ def append_eod_data_to_google_sheet(spreadsheet_id, data_row_dict):
         current_app.logger.error(f"An unexpected error occurred during Google Sheets API operation: {e}", exc_info=True)
         return None
 
-def send_push_notification(user_id, title, body, data=None):
-    """
-    Sends a push notification to all FCM tokens associated with a user.
-    `data` is an optional dictionary for custom key-value pairs (e.g., {"type": "shift_published"}).
-    """
-    # Ensure Firebase Admin SDK is initialized
-    if not firebase_admin._apps:
-        current_app.logger.error("Firebase Admin SDK not initialized when attempting to send push notification.")
-        return False
-
-    user_obj = User.query.get(user_id)
-    if not user_obj:
-        current_app.logger.warning(f"Attempted to send notification to non-existent user_id: {user_id}")
-        return False
-
-    if not user_obj.fcm_tokens:
-        current_app.logger.info(f"User {user_obj.username} has no FCM tokens registered.")
-        return False
-
-    registration_tokens = [token_obj.fcm_token for token_obj in user_obj.fcm_tokens]
-
-    message = messaging.MulticastMessage(
-        notification=messaging.Notification(
-            title=title,
-            body=body,
-        ),
-        data=data,
-        tokens=registration_tokens,
-    )
-
-    try:
-        response = messaging.send_multicast(message)
-        current_app.logger.info(f"Successfully sent {response.success_count} messages to user {user_obj.username}.")
-        if response.failure_count > 0:
-            for resp in response.responses:
-                if not resp.success:
-                    current_app.logger.warning(f"Failed to send message: {resp.exception}")
-        return True
-    except Exception as e:
-        current_app.logger.error(f"Error sending FCM notification to user {user_obj.username}: {e}", exc_info=True)
-        return False
 
 # ==============================================================================
 # User Manual Content

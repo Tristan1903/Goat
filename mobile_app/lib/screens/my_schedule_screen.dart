@@ -30,12 +30,50 @@ class _MyScheduleScreenState extends State<MyScheduleScreen> {
     });
   }
 
+  Future<void> _showDoubleSwapPartSelection(BuildContext context, ScheduleItem shift) async {
+    String? selectedPart = await showDialog<String>(
+      context: context,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          title: Text('Swap which part of the Double shift?'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: <Widget>[
+              ListTile(
+                title: const Text('Full Double'),
+                onTap: () => Navigator.of(context).pop('full'),
+              ),
+              ListTile(
+                title: const Text('Day Part Only'),
+                onTap: () => Navigator.of(context).pop('day'),
+              ),
+              ListTile(
+                title: const Text('Night Part Only'),
+                onTap: () => Navigator.of(context).pop('night'),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+
+    if (selectedPart != null) {
+      Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (ctx) => SubmitSwapRequestScreen(shiftToSwap: shift, swapPart: selectedPart),
+        ),
+      );
+    }
+  }
+
   Future<void> _initializeScheduleData() async {
     final scheduleProvider = Provider.of<ScheduleProvider>(context, listen: false);
     final authProvider = Provider.of<AuthProvider>(context, listen: false);
 
     // Fetch global shift definitions once
-    await scheduleProvider.fetchShiftDefinitions();
+    if (scheduleProvider.shiftDefinitions == null) {
+      await scheduleProvider.fetchShiftDefinitions();
+    }
 
     // Determine primary role for rules (similar to web app logic)
     final currentUser = authProvider.user;
@@ -185,185 +223,224 @@ class _MyScheduleScreenState extends State<MyScheduleScreen> {
         ],
       ),
       body: Consumer<ScheduleProvider>(
-        builder: (context, schedule, child) {
-          if (schedule.isLoading) {
-            return const Center(child: CircularProgressIndicator());
-          }
-          if (schedule.errorMessage != null) {
-            return Center(
-              child: Padding(
-                padding: const EdgeInsets.all(16.0),
-                child: Text(
-                  'Error: ${schedule.errorMessage}',
-                  style: const TextStyle(color: Colors.red),
-                  textAlign: TextAlign.center,
-                ),
+      builder: (context, schedule, child) {
+        if (schedule.isLoading || schedule.shiftDefinitions == null) {
+          return const Center(child: CircularProgressIndicator());
+        }
+        if (schedule.errorMessage != null) {
+          return Center(
+            child: Padding(
+              padding: const EdgeInsets.all(16.0),
+              child: Text(
+                'Error: ${schedule.errorMessage}',
+                style: const TextStyle(color: Colors.red),
+                textAlign: TextAlign.center,
               ),
-            );
-          }
+            ),
+          );
+        }
 
-          if (schedule.myScheduleWeekDates.isEmpty || schedule.myScheduleByDay.isEmpty) {
-            return const Center(child: Text('No schedule data available for this week.'));
-          }
+        if (schedule.myScheduleWeekDates.isEmpty || schedule.myScheduleByDay.isEmpty) {
+          return const Center(child: Text('No schedule data available for this week.', style: TextStyle(color: Colors.white70))); // White text
+        }
 
-          // --- Week Navigation ---
-          final DateTime startOfWeek = displayWeekDates.first;
-          final DateTime endOfWeek = displayWeekDates.last;
+        final DateTime startOfWeek = displayWeekDates.first;
+        final DateTime endOfWeek = displayWeekDates.last;
 
-          return Column(
-            children: [
-              Padding(
-                padding: const EdgeInsets.all(8.0),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    IconButton(
-                      icon: const Icon(Icons.chevron_left),
-                      onPressed: () => _changeWeek(-1),
-                    ),
-                    Expanded(
-                      child: Center(
-                        child: Text(
-                          '$weekLabel (${DateFormat('MMM d').format(startOfWeek)} - ${DateFormat('MMM d, yyyy').format(endOfWeek)})',
-                          style: Theme.of(context).textTheme.titleMedium,
-                          textAlign: TextAlign.center,
-                        ),
+        return Column(
+          children: [
+            // --- Week Navigation ---
+            Padding(
+              padding: const EdgeInsets.all(8.0),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  IconButton(
+                    icon: const Icon(Icons.chevron_left),
+                    onPressed: () => _changeWeek(-1),
+                    color: Theme.of(context).colorScheme.secondary, // Green accent for arrows
+                  ),
+                  Expanded(
+                    child: Center(
+                      child: Text(
+                        '$weekLabel (${DateFormat('MMM d').format(startOfWeek)} - ${DateFormat('MMM d, yyyy').format(endOfWeek)})',
+                        style: Theme.of(context).textTheme.titleMedium?.copyWith(color: Theme.of(context).colorScheme.onBackground), // White text
+                        textAlign: TextAlign.center,
                       ),
                     ),
-                    IconButton(
-                      icon: const Icon(Icons.chevron_right),
-                      onPressed: () => _changeWeek(1),
-                    ),
-                  ],
-                ),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.chevron_right),
+                    onPressed: () => _changeWeek(1),
+                    color: Theme.of(context).colorScheme.secondary, // Green accent for arrows
+                  ),
+                ],
               ),
-              const Divider(),
-
-              // --- Schedule Display (ListView Builder for days) ---
-              Expanded(
-                child: ListView.builder(
-                  itemCount: displayWeekDates.length,
-                  itemBuilder: (context, index) {
-                    final day = displayWeekDates[index];
-                    final shiftsOnDay = schedule.getShiftsForDate(day);
-                    
-                    return Card(
-                      margin: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 4.0),
-                      elevation: 2,
-                      child: Padding(
-                        padding: const EdgeInsets.all(12.0),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              DateFormat('EEEE, MMM d').format(day), // e.g., Tuesday, Oct 20
-                              style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
+            ),
+            const Divider(color: Colors.white70), // White divider
+            // --- Schedule Display (ListView Builder for days) ---
+            Expanded(
+              child: ListView.builder(
+                itemCount: displayWeekDates.length,
+                itemBuilder: (context, index) {
+                  final day = displayWeekDates[index];
+                  final shiftsOnDay = schedule.getShiftsForDate(day);
+                  
+                  return Card(
+                    // --- MODIFIED: Card styling to match white background and rounded corners ---
+                    margin: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 4.0),
+                    elevation: 2,
+                    color: Colors.white, // White background for the card
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8.0)), // Rounded corners
+                    child: Padding(
+                      padding: const EdgeInsets.all(12.0),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            DateFormat('EEEE, MMM d').format(day),
+                            style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold, color: Theme.of(context).colorScheme.onSurface), // Dark text on white card
+                          ),
+                          const Divider(),
+                          if (shiftsOnDay.isEmpty)
+                            Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                            decoration: BoxDecoration(
+                              color: Colors.red.withOpacity(0.1), // Subtle red for OFF
+                              borderRadius: BorderRadius.circular(4),
+                              border: Border.all(color: Colors.red.withOpacity(0.3)),
                             ),
-                            const Divider(),
-                            if (shiftsOnDay.isEmpty)
-                              Text(
-                                'OFF',
-                                style: Theme.of(context).textTheme.bodyLarge?.copyWith(color: Colors.grey),
-                              )
-                            else
-                              ListView.builder(
-                                shrinkWrap: true,
-                                physics: const NeverScrollableScrollPhysics(),
-                                itemCount: shiftsOnDay.length,
-                                itemBuilder: (context, shiftIndex) {
-                                  final shift = shiftsOnDay[shiftIndex];
-                                  final String timeDisplay = scheduleProvider.getFormattedShiftTimeDisplay(
-                                    _displayRoleNameForRules,
-                                    DateFormat('EEEE').format(day), // Day name as string
-                                    shift.shiftType,
-                                    customStart: shift.startTimeStr,
-                                    customEnd: shift.endTimeStr,
+                            child: Text(
+                              'OFF',
+                              style: Theme.of(context).textTheme.bodyLarge?.copyWith(color: Colors.red.shade400),
+                            ),
+                          )
+                          else
+                            ListView.builder(
+                              shrinkWrap: true,
+                              physics: const NeverScrollableScrollPhysics(),
+                              itemCount: shiftsOnDay.length,
+                              itemBuilder: (context, shiftIndex) {
+                                final shift = shiftsOnDay[shiftIndex];
+                                final String timeDisplay = scheduleProvider.getFormattedShiftTimeDisplay(
+                                  _displayRoleNameForRules,
+                                  DateFormat('EEEE').format(day), // Day name as string
+                                  shift.shiftType,
+                                  customStart: shift.startTimeStr,
+                                  customEnd: shift.endTimeStr,
+                                );
+
+                                Widget? statusBadge;
+                                if (shift.status == 'Pending') {
+                                  statusBadge = Chip(
+                                    label: const Text('Swap Pending'),
+                                    backgroundColor: Colors.orange.shade100,
+                                    labelStyle: TextStyle(color: Colors.orange.shade800),
+                                    visualDensity: VisualDensity.compact,
                                   );
+                                } else if (shift.status == 'Open' || shift.status == 'PendingApproval') {
+                                  statusBadge = Chip(
+                                    label: Text('Relinquished - ${shift.status == 'Open' ? 'Open' : 'Pending'}'),
+                                    backgroundColor: Colors.blue.shade100,
+                                    labelStyle: TextStyle(color: Colors.blue.shade800),
+                                    visualDensity: VisualDensity.compact,
+                                  );
+                                }
 
-                                  // Badge for swap/volunteer status
-                                  Widget? statusBadge;
-                                  if (shift.status == 'Pending') {
-                                    statusBadge = Chip(
-                                      label: const Text('Swap Pending'),
-                                      backgroundColor: Colors.orange.shade100,
-                                      labelStyle: TextStyle(color: Colors.orange.shade800),
-                                      visualDensity: VisualDensity.compact,
-                                    );
-                                  } else if (shift.status == 'Open' || shift.status == 'PendingApproval') {
-                                    statusBadge = Chip(
-                                      label: Text('Relinquished - ${shift.status == 'Open' ? 'Open' : 'Pending'}'),
-                                      backgroundColor: Colors.blue.shade100,
-                                      labelStyle: TextStyle(color: Colors.blue.shade800),
-                                      visualDensity: VisualDensity.compact,
-                                    );
-                                  }
+                                // Determine background and text color for the shift display
+                                Color shiftBackgroundColor = Colors.green.withOpacity(0.1);
+                                Color shiftTextColor = Colors.green.shade400;
 
-                                  return Padding(
-                                    padding: const EdgeInsets.symmetric(vertical: 4.0),
-                                    child: Row(
-                                      children: [
-                                        Expanded(
-                                          child: Text(
-                                            '${shift.shiftType} ${timeDisplay}',
-                                            style: Theme.of(context).textTheme.bodyLarge,
-                                          ),
+                                if (shift.shiftType == 'Day') {
+                                  shiftBackgroundColor = Colors.lightBlue.shade50.withOpacity(0.8); // Light blue
+                                  shiftTextColor = Colors.lightBlue.shade800;
+                                } else if (shift.shiftType == 'Night') {
+                                  shiftBackgroundColor = Colors.blue.shade100.withOpacity(0.8); // Darker blue
+                                  shiftTextColor = Colors.blue.shade900;
+                                } else if (shift.shiftType == 'Double') { // Covers 'Double'
+                                  shiftBackgroundColor = Colors.blue.shade200.withOpacity(0.8); // Even darker blue
+                                  shiftTextColor = Colors.blue.shade900;
+                                }
+                                // For 'Split Double' and 'Open' (if they still exist in historical data)
+                                // They would fall through to the default green if no specific coloring is applied.
+
+
+                                return Padding(
+                                  padding: const EdgeInsets.symmetric(vertical: 4.0),
+                                  child: Row(
+                                    children: [
+                                      Expanded(
+                                        child: Container(
+                                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                        decoration: BoxDecoration(
+                                          color: shiftBackgroundColor, // Apply determined background color
+                                          borderRadius: BorderRadius.circular(4),
+                                          border: Border.all(color: shiftBackgroundColor.withOpacity(0.5)),
                                         ),
-                                        if (statusBadge != null)
-                                          Padding(
-                                            padding: const EdgeInsets.only(left: 8.0),
-                                            child: statusBadge,
-                                          ),
-                                        // --- NEW: Swap/Relinquish Buttons ---
-                                        if (canRequestSwapOrRelinquish) // Check if user role allows these actions
-                                      Row(
-                                        mainAxisSize: MainAxisSize.min,
-                                        children: [
-                                          // Request Swap Button
-                                          IconButton(
-                                            icon: const Icon(Icons.swap_horiz, size: 20, color: Colors.blueGrey),
-                                            tooltip: 'Request Shift Swap',
-                                            onPressed: () {
-                                              // Only allow if not already pending a swap or relinquished
-                                              if (shift.status == 'Pending' || shift.status == 'Open' || shift.status == 'PendingApproval') {
-                                                ScaffoldMessenger.of(context).showSnackBar(
-                                                  const SnackBar(content: Text('This shift already has a pending swap or is relinquished.')),
-                                                );
-                                              } else {
-                                                Navigator.of(context).push(
-                                                  MaterialPageRoute(
-                                                    builder: (ctx) => SubmitSwapRequestScreen(shiftToSwap: shift),
-                                                  ),
-                                                );
-                                              }
-                                            },
-                                          ),
-                                          // Relinquish Shift Button
-                                          IconButton(
-                                            icon: const Icon(Icons.back_hand, size: 20, color: Colors.orange),
-                                            tooltip: 'Relinquish Shift',
-                                            onPressed: () {
-                                              // Only allow if not already pending a swap or relinquished
-                                              if (shift.status == 'Pending' || shift.status == 'Open' || shift.status == 'PendingApproval') {
-                                                ScaffoldMessenger.of(context).showSnackBar(
-                                                  const SnackBar(content: Text('This shift already has a pending swap or is relinquished.')),
-                                                );
-                                              } else {
-                                                Navigator.of(context).push(
-                                                  MaterialPageRoute(
-                                                    builder: (ctx) => SubmitRelinquishShiftScreen(shiftToRelinquish: shift),
-                                                  )
-                                                );
+                                        child: Text(
+                                          '${shift.shiftType} ${timeDisplay}',
+                                          style: Theme.of(context).textTheme.bodyLarge?.copyWith(color: shiftTextColor), // Apply determined text color
+                                        ),
+                                      ),
+                                      ),
+                                      if (statusBadge != null)
+                                        Padding(
+                                          padding: const EdgeInsets.only(left: 8.0),
+                                          child: statusBadge,
+                                        ),
+                                      if (canRequestSwapOrRelinquish)
+                                        Row(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            IconButton(
+                                              icon: Icon(Icons.swap_horiz, size: 20, color: Theme.of(context).colorScheme.secondary),
+                                              tooltip: 'Request Shift Swap',
+                                              onPressed: () {
+                                                // Prevent swap if already pending
+                                                if (shift.status == 'Pending' || shift.status == 'Open' || shift.status == 'PendingApproval') {
+                                                  ScaffoldMessenger.of(context).showSnackBar(
+                                                    const SnackBar(content: Text('This shift already has a pending swap or is relinquished.')),
+                                                  );
+                                                  return; // Exit here
                                                 }
-                                            }
+
+                                                // --- Handle Double Shift Swap Part Selection ---
+                                                if (shift.shiftType == 'Double') {
+                                                  _showDoubleSwapPartSelection(context, shift);
+                                                } else {
+                                                  // For non-Double shifts, navigate directly
+                                                  Navigator.of(context).push(
+                                                    MaterialPageRoute(
+                                                      builder: (ctx) => SubmitSwapRequestScreen(shiftToSwap: shift, swapPart: 'full'), // Default to full
+                                                    ),
+                                                  );
+                                                }
+                                              },
+                                            ),
+                                            IconButton(
+                                              icon: Icon(Icons.back_hand, size: 20, color: Theme.of(context).colorScheme.secondary), // Bright blue
+                                              tooltip: 'Relinquish Shift',
+                                              onPressed: () {
+                                                if (shift.status == 'Pending' || shift.status == 'Open' || shift.status == 'PendingApproval') {
+                                                  ScaffoldMessenger.of(context).showSnackBar(
+                                                    const SnackBar(content: Text('This shift already has a pending swap or is relinquished.')),
+                                                  );
+                                                } else {
+                                                  Navigator.of(context).push(
+                                                    MaterialPageRoute(
+                                                      builder: (ctx) => SubmitRelinquishShiftScreen(shiftToRelinquish: shift),
+                                                    ),
+                                                  );
+                                                }
+                                              },
                                             ),
                                           ],
                                         ),
-                                        // --- END NEW ---
-                                      ],
-                                    ),
-                                  );
-                                },
-                              ),
+                                    ],
+                                  ),
+                                );
+                              },
+                            ),
                           ],
                         ),
                       ),
